@@ -6,7 +6,6 @@ import numpy as np
 import pandas as pd
 from scipy.special import factorial
 from scipy.optimize import minimize
-import streamlit as st
 
 class X:
     """Collection of Erlang formulas."""
@@ -76,6 +75,7 @@ class BL:
 
 
 def run_app():
+    import streamlit as st
     st.title("Erlang Calculator")
     st.sidebar.header("Inputs")
     traffic = st.sidebar.number_input("Traffic Intensity (erlangs)", value=5.0)
