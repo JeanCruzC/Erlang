@@ -298,19 +298,24 @@ class BL:
 
 
 def run_app():
+    """Launch Streamlit UI with multi-chat and analysis tools."""
     import streamlit as st
     st.title("Erlang Calculator")
     st.sidebar.header("Inputs")
     traffic = st.sidebar.number_input("Traffic Intensity (erlangs)", value=5.0)
-    trunks = st.sidebar.number_input("Trunks/Agents", value=5, step=1)
+    agents = st.sidebar.number_input("Agents", value=5, step=1)
+    concurrency = st.sidebar.number_input(
+        "Concurrent Chats per Agent", value=1, min_value=1, step=1
+    )
+    effective_agents = int(agents * concurrency)
     aht = st.sidebar.number_input("Average Handle Time (seconds)", value=180)
     target = st.sidebar.number_input("Service Level Target (seconds)", value=20)
 
     if st.sidebar.button("Compute"):
-        b = X.erlang_b(traffic, trunks)
-        c = X.erlang_c(traffic, trunks)
-        sl = CHAT.service_level(traffic, trunks, aht, target)
-        asa = CHAT.asa(traffic, trunks, aht)
+        b = X.erlang_b(traffic, effective_agents)
+        c = X.erlang_c(traffic, effective_agents)
+        sl = CHAT.service_level(traffic, effective_agents, aht, target)
+        asa = CHAT.asa(traffic, effective_agents, aht)
         st.write("### Results")
         st.write(f"Erlang B Blocking: {b:.4f}")
         st.write(f"Erlang C Waiting: {c:.4f}")
@@ -318,24 +323,33 @@ def run_app():
         st.write(f"ASA: {asa:.2f} seconds")
 
     st.sidebar.header("Sensitivity Analysis")
+    sens_start = st.sidebar.number_input(
+        "Traffic Range Start", value=max(0.0, traffic - 3.0)
+    )
+    sens_end = st.sidebar.number_input("Traffic Range End", value=traffic + 3.0)
+    sens_points = st.sidebar.number_input(
+        "Points", min_value=5, value=20, step=1
+    )
     if st.sidebar.button("Run Sensitivity"):
-        tf_range = np.linspace(max(0.1, traffic-3), traffic+3, 20)
-        df = BL.sensitivity(tf_range, trunks, aht, target)
-        st.line_chart(df.set_index('traffic'))
+        tf_range = np.linspace(sens_start, sens_end, int(sens_points))
+        df = BL.sensitivity(tf_range, effective_agents, aht, target)
+        st.line_chart(df.set_index("traffic"))
 
     st.sidebar.header("Monte Carlo")
+    mc_mean = st.sidebar.number_input("Mean Traffic", value=traffic)
     iters = st.sidebar.number_input("Iterations", value=500, step=100)
     if st.sidebar.button("Run Monte Carlo"):
-        series = BL.monte_carlo(traffic, trunks, aht, target, int(iters))
+        series = BL.monte_carlo(mc_mean, effective_agents, aht, target, int(iters))
         st.write(series.describe())
         counts, bins = np.histogram(series, bins=20)
-        st.bar_chart(pd.DataFrame({'count': counts}, index=bins[:-1]))
+        st.bar_chart(pd.DataFrame({"count": counts}, index=bins[:-1]))
 
     st.sidebar.header("Staffing Optimization")
     svc_target = st.sidebar.slider("Target Service Level", 0.5, 0.99, 0.8)
     if st.sidebar.button("Optimize Staffing"):
-        agents = CHAT.required_agents(traffic, aht, svc_target, target)
-        st.write(f"Required Agents: {agents}")
+        required = CHAT.required_agents(traffic, aht, svc_target, target)
+        physical_agents = int(np.ceil(required / concurrency))
+        st.write(f"Required Agents (with concurrency): {physical_agents}")
 
 if __name__ == "__main__":
     run_app()
