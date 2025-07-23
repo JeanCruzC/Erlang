@@ -53,6 +53,271 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # =============================================================================
+# VISUALIZACIÓN DINÁMICA DE AGENTES
+# =============================================================================
+
+def create_agent_visualization(forecast, aht, agents, awt, interval_seconds=3600):
+    """Genera una visualización del estado de agentes y métricas en tiempo real"""
+
+    arrival_rate = forecast / interval_seconds
+    sl = service_level_erlang_c(arrival_rate, aht, agents, awt)
+    asa = waiting_time_erlang_c(arrival_rate, aht, agents)
+    occupancy = occupancy_erlang_c(arrival_rate, aht, agents)
+
+    fig = go.Figure()
+
+    agents_per_row = 10
+    rows = math.ceil(agents / agents_per_row)
+
+    colors = {
+        "busy": "#FF6B6B",
+        "available": "#4ECDC4",
+        "break": "#45B7D1",
+        "offline": "#95A5A6",
+    }
+
+    busy_agents = int(agents * occupancy)
+    available_agents = agents - busy_agents
+
+    agent_states = ["busy"] * busy_agents + ["available"] * available_agents
+
+    agent_x, agent_y, agent_colors, agent_text = [], [], [], []
+
+    for i in range(agents):
+        row = i // agents_per_row
+        col = i % agents_per_row
+
+        x = col * 1.2
+        y = rows - row - 1
+
+        agent_x.append(x)
+        agent_y.append(y)
+
+        state = agent_states[i] if i < len(agent_states) else "offline"
+        agent_colors.append(colors[state])
+
+        status_emoji = {
+            "busy": "🔴",
+            "available": "🟢",
+            "break": "🔵",
+            "offline": "⚫",
+        }
+        agent_text.append(f"Agente {i+1}<br>{status_emoji.get(state, '⚫')}")
+
+    fig.add_trace(
+        go.Scatter(
+            x=agent_x,
+            y=agent_y,
+            mode="markers+text",
+            marker=dict(size=40, color=agent_colors, symbol="circle", line=dict(width=2, color="white")),
+            text=["👤" for _ in range(agents)],
+            textfont=dict(size=20),
+            textposition="middle center",
+            hovertemplate="<b>%{text}</b><br>Estado: %{customdata}<br><extra></extra>",
+            customdata=[state.title() for state in agent_states],
+            name="Agentes",
+        )
+    )
+
+    if agents <= arrival_rate * aht:
+        queue_length = 20
+    else:
+        pc = erlang_c(arrival_rate * aht, agents)
+        queue_length = max(0, int(pc * arrival_rate * asa))
+
+    # Posición inicial de la cola a la derecha de la sección de agentes
+    queue_x = 15
+    queue_start_y = rows - 1
+
+    if queue_length > 0:
+        queue_positions_x, queue_positions_y = [], []
+        for q in range(min(queue_length, 15)):
+            if q < 5:
+                qx = queue_x
+                qy = queue_start_y - (q * 0.3)
+            elif q < 10:
+                qx = queue_x + 0.8
+                qy = queue_start_y - ((q - 5) * 0.3)
+            else:
+                qx = queue_x + 1.6
+                qy = queue_start_y - ((q - 10) * 0.3)
+
+            queue_positions_x.append(qx)
+            queue_positions_y.append(qy)
+
+        if asa <= 20:
+            queue_color = "#4ECDC4"
+        elif asa <= 60:
+            queue_color = "#F7DC6F"
+        else:
+            queue_color = "#FF6B6B"
+
+        fig.add_trace(
+            go.Scatter(
+                x=queue_positions_x,
+                y=queue_positions_y,
+                mode="markers+text",
+                marker=dict(size=25, color=queue_color, symbol="circle", line=dict(width=1, color="gray")),
+                text=["⏳" for _ in range(len(queue_positions_x))],
+                textfont=dict(size=12),
+                textposition="middle center",
+                hovertemplate="<b>Persona en cola</b><br>Tiempo esperando: ~%{customdata:.1f} seg<br><extra></extra>",
+                customdata=[asa * (q + 1) / queue_length for q in range(len(queue_positions_x))],
+                name="Cola de Espera",
+            )
+        )
+
+        if queue_length > 15:
+            fig.add_trace(
+                go.Scatter(
+                    x=[queue_x + 0.8],
+                    y=[queue_start_y - 5],
+                    mode="text",
+                    text=[f"+{queue_length - 15} más"],
+                    textfont=dict(size=10, color="red"),
+                    showlegend=False,
+                    hoverinfo="skip",
+                )
+            )
+
+    # Las métricas se sitúan más a la derecha para evitar superposición
+    metrics_x = 25
+    metrics_y = rows - 1
+
+    sl_color = "#4ECDC4" if sl >= 0.8 else "#F7DC6F" if sl >= 0.7 else "#FF6B6B"
+    fig.add_trace(
+        go.Scatter(
+            x=[metrics_x],
+            y=[metrics_y],
+            mode="markers+text",
+            marker=dict(size=60, color=sl_color, symbol="circle"),
+            text=[f"{sl:.0%}"],
+            textfont=dict(size=12, color="white"),
+            textposition="middle center",
+            hovertemplate="<b>Service Level</b><br>%{text}<br><extra></extra>",
+            name="Service Level",
+        )
+    )
+
+    asa_color = "#4ECDC4" if asa <= 20 else "#F7DC6F" if asa <= 60 else "#FF6B6B"
+    fig.add_trace(
+        go.Scatter(
+            x=[metrics_x],
+            y=[metrics_y - 2.5],
+            mode="markers+text",
+            marker=dict(size=60, color=asa_color, symbol="circle"),
+            text=[f"{asa:.0f}s"],
+            textfont=dict(size=12, color="white"),
+            textposition="middle center",
+            hovertemplate="<b>ASA (Average Speed of Answer)</b><br>%{text} segundos<br><extra></extra>",
+            name="ASA",
+        )
+    )
+
+    occ_color = "#4ECDC4" if 0.7 <= occupancy <= 0.85 else "#F7DC6F" if occupancy <= 0.9 else "#FF6B6B"
+    fig.add_trace(
+        go.Scatter(
+            x=[metrics_x],
+            y=[metrics_y - 5],
+            mode="markers+text",
+            marker=dict(size=60, color=occ_color, symbol="circle"),
+            text=[f"{occupancy:.0%}"],
+            textfont=dict(size=12, color="white"),
+            textposition="middle center",
+            hovertemplate="<b>Ocupación</b><br>%{text}<br><extra></extra>",
+            name="Ocupación",
+        )
+    )
+
+    fig.add_annotation(
+        x=agents_per_row * 1.2 / 2,
+        y=rows + 0.5,
+        text="<b>👥 AGENTES</b>",
+        showarrow=False,
+        font=dict(size=16, color="black"),
+        bgcolor="white",
+        bordercolor="black",
+        borderwidth=1,
+    )
+
+    if queue_length > 0:
+        fig.add_annotation(
+            x=queue_x + 0.8,
+            y=rows + 0.5,
+            text=f"<b>📞 COLA ({queue_length})</b>",
+            showarrow=False,
+            font=dict(size=16, color="black"),
+            bgcolor="white",
+            bordercolor="black",
+            borderwidth=1,
+        )
+
+    fig.add_annotation(
+        x=metrics_x,
+        y=rows + 0.5,
+        text="<b>📊 MÉTRICAS</b>",
+        showarrow=False,
+        font=dict(size=16, color="black"),
+        bgcolor="white",
+        bordercolor="black",
+        borderwidth=1,
+    )
+
+    fig_width = max(800, int((metrics_x + 5) * 30))
+
+    fig.update_layout(
+        title={
+            "text": f"<b>🏢 Vista en Tiempo Real del Call Center</b><br><span style='font-size:14px'>Forecast: {forecast:.0f} llamadas/h | AHT: {aht:.0f}s | Agentes: {agents}</span>",
+            "x": 0.5,
+            "font": {"size": 18},
+        },
+        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[-2, metrics_x + 5]),
+        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[-1, rows + 1]),
+        plot_bgcolor="#F8F9FA",
+        paper_bgcolor="white",
+        showlegend=True,
+        legend=dict(orientation="h", yanchor="bottom", y=-0.1, xanchor="center", x=0.5),
+        height=400 + (rows * 50),
+        width=fig_width,
+        margin=dict(l=80, r=80, t=80, b=100),
+    )
+
+    return fig
+
+
+def create_real_time_dashboard(forecast, aht, agents, awt, interval_seconds=3600):
+    """Crea un dashboard con la visualización de agentes y su estado"""
+
+    agent_viz = create_agent_visualization(forecast, aht, agents, awt, interval_seconds)
+
+    arrival_rate = forecast / interval_seconds
+    sl = service_level_erlang_c(arrival_rate, aht, agents, awt)
+    asa = waiting_time_erlang_c(arrival_rate, aht, agents)
+    occupancy = occupancy_erlang_c(arrival_rate, aht, agents)
+
+    states_data = {
+        "Estado": ["🔴 Ocupados", "🟢 Disponibles", "📞 En Cola"],
+        "Cantidad": [
+            int(agents * occupancy),
+            agents - int(agents * occupancy),
+            max(0, int(erlang_c(arrival_rate * aht, agents) * arrival_rate * asa)) if agents > arrival_rate * aht else 20,
+        ],
+    }
+
+    status_bar = px.bar(
+        x=states_data["Cantidad"],
+        y=states_data["Estado"],
+        orientation="h",
+        color=states_data["Estado"],
+        color_discrete_map={"🔴 Ocupados": "#FF6B6B", "🟢 Disponibles": "#4ECDC4", "📞 En Cola": "#F7DC6F"},
+        title="📊 Estado Actual del Sistema",
+    )
+
+    status_bar.update_layout(showlegend=False, height=200, margin=dict(l=50, r=50, t=50, b=50))
+
+    return agent_viz, status_bar
+
+# =============================================================================
 # FUNCIONES MATEMÁTICAS BASE
 # =============================================================================
 
@@ -386,11 +651,21 @@ def main():
     # Selección de módulo
     module = st.sidebar.selectbox(
         "📊 Seleccionar Módulo",
-        ["Erlang C/X", "Chat Multi-canal", "Blending", "Erlang O (Outbound)", "Análisis Comparativo", "Staffing Optimizer"]
+        [
+            "Erlang C/X",
+            "Erlang C/X Visual",
+            "Chat Multi-canal",
+            "Blending",
+            "Erlang O (Outbound)",
+            "Análisis Comparativo",
+            "Staffing Optimizer",
+        ]
     )
     
     if module == "Erlang C/X":
         erlang_x_interface()
+    elif module == "Erlang C/X Visual":
+        enhanced_erlang_x_interface()
     elif module == "Chat Multi-canal":
         chat_interface()
     elif module == "Blending":
@@ -538,6 +813,96 @@ def erlang_x_interface():
     fig.add_vline(x=recommended_agents, line_dash="dash", line_color="orange", annotation_text="Recomendado")
     
     st.plotly_chart(fig, use_container_width=True)
+
+
+def enhanced_erlang_x_interface():
+    """Versión con visualización dinámica de agentes"""
+
+    st.header("📈 Erlang C/X Calculator")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.subheader("📝 Parámetros de Entrada")
+        forecast = st.number_input("Forecast (llamadas por intervalo)", min_value=1.0, value=100.0, step=1.0)
+        interval_choice = st.selectbox("Intervalo del forecast", ["30 minutos", "1 hora"], index=1)
+        interval_seconds = 1800 if interval_choice == "30 minutos" else 3600
+        aht = st.number_input("AHT (segundos)", min_value=1.0, value=240.0, step=1.0)
+        agents = int(st.number_input("Agentes", min_value=1, value=25, step=1))
+        awt = st.number_input("AWT (segundos)", min_value=1.0, value=20.0, step=1.0)
+
+        st.subheader("🔧 Parámetros Avanzados")
+        use_advanced = st.checkbox("Usar Erlang X (con abandonment)")
+
+        lines = None
+        patience = None
+
+        if use_advanced:
+            lines = st.number_input("Líneas disponibles", min_value=int(agents), value=int(agents * 1.2), step=1)
+            patience = st.number_input("Patience (segundos)", min_value=1.0, value=120.0, step=1.0)
+
+    with col2:
+        st.subheader("📊 Resultados")
+
+        arrival_rate = forecast / interval_seconds
+        sl = X.SLA.calculate(arrival_rate, aht, agents, awt, lines, patience)
+        asa = X.asa(arrival_rate, aht, agents)
+        occ = X.occupancy(arrival_rate, aht, agents)
+
+        st.metric("Service Level", f"{sl:.1%}")
+        st.metric("ASA", f"{asa:.2f} seg")
+        st.metric("Ocupación", f"{occ:.1%}")
+
+    st.subheader("🎬 Visualización en Tiempo Real")
+
+    agent_viz, status_bar = create_real_time_dashboard(forecast, aht, agents, awt, interval_seconds)
+    st.plotly_chart(agent_viz, use_container_width=True)
+
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        st.plotly_chart(status_bar, use_container_width=True)
+    with col2:
+        st.markdown(
+            """
+            ### 🎨 Leyenda de Estados
+
+            **Agentes:**
+            - 🔴 **Ocupado**
+            - 🟢 **Disponible**
+
+            **Cola:**
+            - ⏳ **Esperando**
+            - 🟢 **Cola Corta**
+            - 🟡 **Cola Moderada**
+            - 🔴 **Cola Larga**
+
+            **Métricas:**
+            - 🟢 **Bueno**
+            - 🟡 **Aceptable**
+            - 🔴 **Crítico**
+            """
+        )
+
+    st.subheader("🎮 Controles de Simulación")
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        if st.button("📈 Aumentar Demanda (+20%)"):
+            forecast_sim = forecast * 1.2
+            viz, _ = create_real_time_dashboard(forecast_sim, aht, agents, awt, interval_seconds)
+            st.plotly_chart(viz, use_container_width=True)
+
+    with col2:
+        if st.button("👥 Agregar 5 Agentes"):
+            agents_sim = agents + 5
+            viz, _ = create_real_time_dashboard(forecast, aht, agents_sim, awt, interval_seconds)
+            st.plotly_chart(viz, use_container_width=True)
+
+    with col3:
+        if st.button("⏱️ Reducir AHT (-30s)"):
+            aht_sim = max(60, aht - 30)
+            viz, _ = create_real_time_dashboard(forecast, aht_sim, agents, awt, interval_seconds)
+            st.plotly_chart(viz, use_container_width=True)
 
 def erlang_o_interface():
     st.header("📞 Erlang O - Outbound Calculator")
