@@ -398,6 +398,9 @@ def main():
     elif module == "Staffing Optimizer":
         staffing_optimizer()
 
+    # Display methodology and formulas
+    show_methodology()
+
 def erlang_x_interface():
     st.header("📈 Erlang C/X Calculator")
     
