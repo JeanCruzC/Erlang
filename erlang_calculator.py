@@ -24,6 +24,7 @@ import pandas as pd
 from scipy.special import factorial
 from scipy.optimize import minimize
 import matplotlib.pyplot as plt
+import math
 
 
 class BLOCKING:
@@ -295,6 +296,39 @@ class BL:
             if not 0 < max_occupancy <= 1:
                 raise ValueError("max_occupancy must be in (0, 1]")
             return int(np.ceil(traffic / max_occupancy))
+
+
+class ERLANG_O:
+    """Utilities for outbound-only call centres."""
+
+    @staticmethod
+    def productivity(agents: int, hours_per_day: float, calls_per_hour: float, success_rate: float = 0.3) -> dict:
+        """Return basic outbound productivity metrics."""
+
+        total_calls = agents * hours_per_day * calls_per_hour
+        successful_calls = total_calls * success_rate
+        return {
+            "total_calls": total_calls,
+            "successful_calls": successful_calls,
+            "success_rate": success_rate,
+            "calls_per_agent_day": hours_per_day * calls_per_hour,
+            "successful_per_agent_day": hours_per_day * calls_per_hour * success_rate,
+        }
+
+    @staticmethod
+    def agents_for_target(target_calls_day: int, hours_per_day: float, calls_per_hour: float, success_rate: float = 0.3) -> int:
+        """Return agents required for a target number of successful calls."""
+
+        calls_per_agent_day = hours_per_day * calls_per_hour * success_rate
+        return int(math.ceil(target_calls_day / calls_per_agent_day))
+
+    @staticmethod
+    def dialer_ratio(answer_rate: float = 0.25, agent_talk_time: float = 5, wait_between_calls: float = 2) -> float:
+        """Predictive dialer ratio suggestion."""
+
+        cycle_time = agent_talk_time + wait_between_calls
+        ratio = cycle_time / (agent_talk_time * answer_rate)
+        return max(1.0, ratio)
 
 
 
@@ -771,6 +805,35 @@ def run_complete_analysis():
         growth_rate=0.05,
         periods=12,
     )
+
+
+def erlang_o_interface() -> None:
+    """Minimal outbound productivity calculator."""
+
+    import streamlit as st
+
+    st.header("Erlang O - Outbound Calculator")
+    agents = st.number_input("Agents", min_value=1, value=10, step=1)
+    hours = st.number_input("Hours per day", min_value=1.0, value=8.0, step=0.5)
+    calls_per_hour = st.number_input("Calls per hour", min_value=1.0, value=20.0, step=1.0)
+    success_rate = st.slider("Success rate", 0.1, 0.9, 0.3, 0.01)
+
+    prod = ERLANG_O.productivity(agents, hours, calls_per_hour, success_rate)
+    st.write("### Productivity")
+    st.write(prod)
+
+
+def run_app_pro() -> None:
+    """Experimental Streamlit interface with outbound module."""
+
+    import streamlit as st
+
+    st.set_page_config(page_title="Erlang Calculator Pro", page_icon="\U0001F4DE")
+    module = st.sidebar.selectbox("Module", ["Basic", "Outbound"])
+    if module == "Outbound":
+        erlang_o_interface()
+    else:
+        run_app()
 
 
 if __name__ == "__main__":
