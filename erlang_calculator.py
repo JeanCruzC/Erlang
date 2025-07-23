@@ -119,11 +119,18 @@ def create_agent_visualization(forecast, aht, agents, awt, interval_seconds=3600
         )
     )
 
-    if agents <= arrival_rate * aht:
-        queue_length = 20
+    # Calcular cola de espera - CORREGIDO
+    traffic_intensity = arrival_rate * aht
+    if occupancy > 0.95:
+        # Sistema saturado - mayoría abandona, solo quedan 1-2 personas persistentes
+        queue_length = min(2, max(0, int(forecast * 0.04)))
+    elif occupancy > 0.85:
+        # Sistema estresado
+        queue_length = max(0, int(forecast * 0.08))
     else:
-        pc = erlang_c(arrival_rate * aht, agents)
-        queue_length = max(0, int(pc * arrival_rate * asa))
+        # Sistema normal
+        pc = erlang_c(traffic_intensity, agents)
+        queue_length = max(0, int(pc * forecast * 0.1))
 
     queue_x = 15
     queue_start_y = rows - 1
