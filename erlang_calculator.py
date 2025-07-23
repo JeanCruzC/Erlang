@@ -299,11 +299,11 @@ def create_real_time_dashboard(forecast, aht, agents, awt, interval_seconds=3600
     occupancy = occupancy_erlang_c(arrival_rate, aht, agents)
 
     states_data = {
-        "Estado": ["🔴 Ocupados", "🟢 Disponibles", "📞 En Cola"],
+        "Estado": ["🔴 Ocupados", "🟢 Disponibles", "⏳ Esperando"],
         "Cantidad": [
             int(agents * occupancy),
             agents - int(agents * occupancy),
-            max(0, int(erlang_c(arrival_rate * aht, agents) * arrival_rate * asa)) if agents > arrival_rate * aht else 20,
+            min(2, max(0, int(forecast * 0.04))) if occupancy > 0.95 else max(0, int(forecast * 0.1)),
         ],
     }
 
@@ -312,7 +312,7 @@ def create_real_time_dashboard(forecast, aht, agents, awt, interval_seconds=3600
         y=states_data["Estado"],
         orientation="h",
         color=states_data["Estado"],
-        color_discrete_map={"🔴 Ocupados": "#FF6B6B", "🟢 Disponibles": "#4ECDC4", "📞 En Cola": "#F7DC6F"},
+        color_discrete_map={"🔴 Ocupados": "#FF6B6B", "🟢 Disponibles": "#4ECDC4", "⏳ Esperando": "#F7DC6F"},
         title="📊 Estado Actual del Sistema",
     )
 
