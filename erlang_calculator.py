@@ -1,778 +1,1157 @@
-# coding: utf-8
+# =============================================================================
+# ERLANG CALCULATOR COMPLETO - STREAMLIT APP
+# Implementación completa con X, CHAT, BL y ERLANG O
+# =============================================================================
 
-"""Erlang calculator with Streamlit UI.
-
-This module exposes a minimal set of Erlang based formulas that can be used in
-scripts or through the included Streamlit application.  Additional convenience
-classes are provided for common call centre KPIs such as service level or
-occupancy.
-
-Examples
---------
->>> from erlang_calculator import SLA, ASA, BLOCKING
->>> SLA.probability(traffic=6, agents=8, aht=180, target=20)
-0.82  # approximate service level
-
->>> ASA.wait_time(traffic=6, agents=8, aht=180)
-23.4  # average speed of answer in seconds
-
-The :func:`run_app` function starts a Streamlit interface for interactive use.
-"""
-
-import numpy as np
+import streamlit as st
 import pandas as pd
-from scipy.special import factorial
-from scipy.optimize import minimize
-import matplotlib.pyplot as plt
+import numpy as np
+import plotly.graph_objects as go
+import plotly.express as px
+from scipy import optimize
+from scipy.special import gammainc, gamma
+import math
+from typing import Union, List
 
+# =============================================================================
+# CONFIGURACIÓN DE STREAMLIT
+# =============================================================================
 
-class BLOCKING:
-    """Blocking related calculations."""
+st.set_page_config(
+    page_title="Erlang Calculator Pro",
+    page_icon="📞",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
+# CSS personalizado
+st.markdown("""
+<style>
+    .main-header {
+        font-size: 3rem;
+        color: #1f77b4;
+        text-align: center;
+        margin-bottom: 2rem;
+    }
+    .metric-card {
+        background-color: #f0f2f6;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        margin: 0.5rem 0;
+    }
+    .success-metric {
+        background-color: #d4edda;
+        border-left: 4px solid #28a745;
+    }
+    .warning-metric {
+        background-color: #fff3cd;
+        border-left: 4px solid #ffc107;
+    }
+    .danger-metric {
+        background-color: #f8d7da;
+        border-left: 4px solid #dc3545;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# =============================================================================
+# FUNCIONES MATEMÁTICAS BASE
+# =============================================================================
+
+@st.cache_data
+def factorial_approx(n):
+    """Aproximación de factorial usando Stirling para números grandes"""
+    if n < 170:
+        return math.factorial(int(n))
+    else:
+        return math.sqrt(2 * math.pi * n) * (n / math.e) ** n
+
+@st.cache_data
+def erlang_b(traffic, agents):
+    """Fórmula de Erlang B (blocking probability)"""
+    if agents == 0:
+        return 1.0
+    if traffic == 0:
+        return 0.0
+    
+    b = 1.0
+    for i in range(1, agents + 1):
+        b = (traffic * b) / (i + traffic * b)
+    return b
+
+@st.cache_data
+def erlang_c(traffic, agents):
+    """Fórmula de Erlang C (waiting probability)"""
+    if agents <= traffic:
+        return 1.0
+    
+    eb = erlang_b(traffic, agents)
+    rho = traffic / agents
+    
+    if rho >= 1:
+        return 1.0
+    
+    return eb / (1 - rho + rho * eb)
+
+@st.cache_data
+def service_level_erlang_c(forecast, aht, agents, awt):
+    """Calcula el nivel de servicio usando Erlang C"""
+    traffic = forecast * aht
+    
+    if agents <= traffic:
+        return 0.0
+    
+    pc = erlang_c(traffic, agents)
+    
+    if pc == 0:
+        return 1.0
+    
+    exp_factor = math.exp(-(agents - traffic) * awt / aht)
+    return 1 - pc * exp_factor
+
+@st.cache_data
+def waiting_time_erlang_c(forecast, aht, agents):
+    """Calcula el tiempo promedio de espera (ASA)"""
+    traffic = forecast * aht
+    
+    if agents <= traffic:
+        return float('inf')
+    
+    pc = erlang_c(traffic, agents)
+    return (pc * aht) / (agents - traffic)
+
+@st.cache_data
+def occupancy_erlang_c(forecast, aht, agents):
+    """Calcula la ocupación de los agentes"""
+    traffic = forecast * aht
+    return min(traffic / agents, 1.0)
+
+@st.cache_data
+def erlang_x_abandonment(forecast, aht, agents, lines, patience):
+    """Calcula la probabilidad de abandono en modelo Erlang X"""
+    traffic = forecast * aht
+    
+    if patience == 0:
+        return erlang_b(traffic, lines)
+    
+    if agents >= traffic:
+        pc = erlang_c(traffic, agents)
+        avg_wait = waiting_time_erlang_c(forecast, aht, agents)
+        return pc * (1 - math.exp(-avg_wait / patience))
+    else:
+        return min(1.0, traffic / lines)
+
+# =============================================================================
+# MÓDULO ERLANG O (OUTBOUND ONLY)
+# =============================================================================
+
+class ERLANG_O:
+    """Módulo para cálculos de campañas outbound puras"""
+    
     @staticmethod
-    def probability(traffic: float, trunks: int) -> float:
-        """Return Erlang B blocking probability.
-
-        Parameters
-        ----------
-        traffic : float
-            Offered traffic intensity in erlangs.
-        trunks : int
-            Number of available trunks/lines.
-
-        Examples
-        --------
-        >>> BLOCKING.probability(traffic=4, trunks=5)
-        0.10
+    def productivity(agents, hours_per_day, calls_per_hour, success_rate=0.3):
         """
-
-        traffic = float(traffic)
-        trunks = int(trunks)
-        if trunks <= 0:
-            raise ValueError("trunks must be positive")
-        inv_b = np.sum([(traffic ** k) / factorial(k) for k in range(trunks + 1)])
-        b = ((traffic ** trunks) / factorial(trunks)) / inv_b
-        return float(b)
-
-
-class OCCUPANCY:
-    """Agent occupancy calculations.
-
-    Examples
-    --------
-    >>> OCCUPANCY.rate(traffic=5, agents=8)
-    0.625
-    """
-
+        Calcula la productividad de una campaña outbound
+        
+        Parameters:
+        agents (int): Número de agentes
+        hours_per_day (float): Horas de trabajo por día
+        calls_per_hour (float): Llamadas por hora por agente
+        success_rate (float): Tasa de éxito (contactos efectivos)
+        
+        Returns:
+        dict: Métricas de productividad
+        """
+        total_calls = agents * hours_per_day * calls_per_hour
+        successful_calls = total_calls * success_rate
+        
+        return {
+            'total_calls': total_calls,
+            'successful_calls': successful_calls,
+            'success_rate': success_rate,
+            'calls_per_agent_day': hours_per_day * calls_per_hour,
+            'successful_per_agent_day': hours_per_day * calls_per_hour * success_rate
+        }
+    
     @staticmethod
-    def rate(traffic: float, agents: int) -> float:
-        """Return occupancy ratio given offered traffic and agents."""
-
-        traffic = float(traffic)
-        agents = int(agents)
-        if agents <= 0:
-            raise ValueError("agents must be positive")
-        occ = traffic / agents
-        return min(max(occ, 0.0), 1.0)
-
-
-class SLA:
-    """Service level calculations.
-
-    Examples
-    --------
-    >>> SLA.probability(traffic=6, agents=8, aht=180, target=20)
-    0.82
-    """
-
+    def agents_for_target(target_calls_day, hours_per_day, calls_per_hour, success_rate=0.3):
+        """
+        Calcula agentes necesarios para lograr objetivo de llamadas exitosas
+        """
+        calls_per_agent_day = hours_per_day * calls_per_hour * success_rate
+        return math.ceil(target_calls_day / calls_per_agent_day)
+    
     @staticmethod
-    def probability(traffic: float, agents: int, aht: float, target: float) -> float:
-        """Return service level probability."""
+    def dialer_ratio(answer_rate=0.25, agent_talk_time=5, wait_between_calls=2):
+        """
+        Calcula la ratio óptima del predictive dialer
+        
+        Parameters:
+        answer_rate (float): Tasa de respuesta (0.2-0.3 típico)
+        agent_talk_time (float): Tiempo promedio de conversación (minutos)
+        wait_between_calls (float): Tiempo entre llamadas (minutos)
+        
+        Returns:
+        float: Ratio de marcado (líneas por agente)
+        """
+        cycle_time = agent_talk_time + wait_between_calls
+        ratio = cycle_time / (agent_talk_time * answer_rate)
+        return max(1.0, ratio)
 
-        if agents <= 0:
-            raise ValueError("agents must be positive")
-        if aht <= 0 or target < 0:
-            raise ValueError("aht and target must be positive")
-        c = X.erlang_c(traffic, agents)
-        return 1 - c * np.exp(-(agents - traffic) * target / aht)
-
-
-class ASA:
-    """Average speed of answer related utilities.
-
-    Examples
-    --------
-    >>> ASA.wait_time(traffic=6, agents=8, aht=180)
-    23.4
-    """
-
-    @staticmethod
-    def wait_time(traffic: float, agents: int, aht: float) -> float:
-        """Return expected waiting time in seconds."""
-
-        if agents <= 0:
-            raise ValueError("agents must be positive")
-        if aht <= 0:
-            raise ValueError("aht must be positive")
-        c = X.erlang_c(traffic, agents)
-        if agents <= traffic:
-            return float('inf')
-        return (c / (agents - traffic)) * aht
-
-
-class ABANDON:
-    """Call abandonment calculations.
-
-    Examples
-    --------
-    >>> ABANDON.probability(traffic=6, agents=8, aht=180, patience=30)
-    0.45
-    """
-
-    @staticmethod
-    def probability(
-        traffic: float,
-        agents: int,
-        aht: float,
-        patience: float = 30.0,
-    ) -> float:
-        """Estimate abandonment probability assuming exponential patience."""
-
-        if patience <= 0:
-            raise ValueError("patience must be positive")
-        wait = ASA.wait_time(traffic, agents, aht)
-        if np.isinf(wait):
-            return 1.0
-        return 1 - np.exp(-wait / patience)
+# =============================================================================
+# MÓDULOS PRINCIPALES
+# =============================================================================
 
 class X:
-    """Collection of Erlang formulas."""
-
-    @staticmethod
-    def erlang_b(traffic, trunks):
-        """Compute Erlang B blocking probability.
-
-        Parameters
-        ----------
-        traffic : float
-            Offered traffic in erlangs.
-        trunks : int
-            Number of available trunks.
-        """
-        traffic = float(traffic)
-        trunks = int(trunks)
-        inv_b = np.sum([(traffic ** k) / factorial(k) for k in range(trunks + 1)])
-        b = ((traffic ** trunks) / factorial(trunks)) / inv_b
-        return b
-
-    @staticmethod
-    def erlang_c(traffic, agents):
-        """Compute Erlang C waiting probability.
-
-        Parameters
-        ----------
-        traffic : float
-            Offered traffic in erlangs.
-        agents : int
-            Number of available agents.
-        """
-        traffic = float(traffic)
-        agents = int(agents)
-        rho = traffic / agents
-        if rho >= 1:
-            return 1.0
-        numerator = ((traffic ** agents) / factorial(agents)) * (agents / (agents - traffic))
-        denom = np.sum([(traffic ** k) / factorial(k) for k in range(agents)]) + numerator
-        return numerator / denom
-
-    class AGENTS:
-        """Staffing utilities for Erlang B/C models."""
-
+    """Módulo Erlang C/X"""
+    
+    class SLA:
         @staticmethod
-        def required_for_blocking(traffic: float, target_blocking: float) -> int:
-            """Minimum trunks so blocking <= ``target_blocking``."""
-
-            if traffic < 0:
-                raise ValueError("traffic must be non-negative")
-            if target_blocking <= 0:
-                return int(np.ceil(traffic))
-
-            if target_blocking >= 1:
-                raise ValueError("target_blocking must be < 1")
-
-            trunks = max(int(np.ceil(traffic)), 1)
-            while BLOCKING.probability(traffic, trunks) > target_blocking:
-                trunks += 1
-            return trunks
+        def calculate(forecast, aht, agents, awt, lines=None, patience=None, retrials=None):
+            if lines is None and patience is None:
+                return service_level_erlang_c(forecast, aht, agents, awt)
+            elif lines is not None and patience is None:
+                traffic = forecast * aht
+                blocking = erlang_b(traffic, lines)
+                if blocking > 0.99:
+                    return 0.0
+                effective_forecast = forecast * (1 - blocking)
+                return service_level_erlang_c(effective_forecast, aht, agents, awt)
+            else:
+                traffic = forecast * aht
+                if agents <= traffic:
+                    return 0.0
+                base_sl = service_level_erlang_c(forecast, aht, agents, awt)
+                abandon_rate = erlang_x_abandonment(forecast, aht, agents, lines or 999, patience or 999)
+                return base_sl * (1 - abandon_rate * 0.5)
+    
+    class AGENTS:
+        @staticmethod
+        def for_sla(sl_target, forecast, aht, awt, lines=None, patience=None):
+            traffic = forecast * aht
+            
+            def objective(agents):
+                if agents <= 0:
+                    return float('inf')
+                sl = X.SLA.calculate(forecast, aht, agents, awt, lines, patience)
+                return abs(sl - sl_target)
+            
+            result = optimize.minimize_scalar(objective, bounds=(traffic * 0.5, traffic * 3), method='bounded')
+            return max(1, round(result.x, 1))
+        
+        @staticmethod
+        def for_asa(asa_target, forecast, aht, lines=None, patience=None):
+            traffic = forecast * aht
+            
+            def objective(agents):
+                if agents <= traffic:
+                    return float('inf')
+                actual_asa = waiting_time_erlang_c(forecast, aht, agents)
+                return abs(actual_asa - asa_target)
+            
+            result = optimize.minimize_scalar(objective, bounds=(traffic + 0.1, traffic * 2), method='bounded')
+            return max(1, round(result.x, 1))
+    
+    @staticmethod
+    def asa(forecast, aht, agents):
+        return waiting_time_erlang_c(forecast, aht, agents)
+    
+    @staticmethod
+    def occupancy(forecast, aht, agents):
+        return occupancy_erlang_c(forecast, aht, agents)
+    
+    @staticmethod
+    def abandonment(forecast, aht, agents, lines, patience):
+        return erlang_x_abandonment(forecast, aht, agents, lines, patience)
 
 class CHAT:
-    """Call center metrics."""
-
+    """Módulo Chat Multi-canal"""
+    
     @staticmethod
-    def service_level(traffic, agents, aht, target):
-        """Return probability a call is answered within ``target`` seconds.
-
-        Parameters
-        ----------
-        traffic : float
-            Offered traffic in erlangs.
-        agents : int
-            Number of available agents.
-        aht : float
-            Average handle time (seconds).
-        target : float
-            Service level threshold in seconds.
-        """
-
-        c = X.erlang_c(traffic, agents)
-        return 1 - c * np.exp(-(agents - traffic) * target / aht)
-
+    def sla(forecast, aht_list, agents, awt, lines, patience):
+        parallel_capacity = len(aht_list)
+        avg_aht = sum(aht_list) / len(aht_list)
+        effectiveness = 0.7 + (0.3 / parallel_capacity)
+        effective_agents = agents * parallel_capacity * effectiveness
+        return service_level_erlang_c(forecast, avg_aht, effective_agents, awt)
+    
     @staticmethod
-    def asa(traffic, agents, aht):
-        """Return the average waiting time before answer in seconds."""
-
-        c = X.erlang_c(traffic, agents)
-        if agents <= traffic:
-            return np.inf
-        return (c / (agents - traffic)) * aht
-
-    class AGENTS:
-        """Agent requirement utilities for call centre KPIs."""
-
-        @staticmethod
-        def for_service_level(
-            traffic: float, aht: float, target_service: float, target_time: float = 20
-        ) -> int:
-            """Wrapper around :func:`required_agents`."""
-
-            return CHAT.required_agents(traffic, aht, target_service, target_time)
-
+    def agents_for_sla(sl_target, forecast, aht_list, awt, lines, patience):
+        parallel_capacity = len(aht_list)
+        avg_aht = sum(aht_list) / len(aht_list)
+        effectiveness = 0.7 + (0.3 / parallel_capacity)
+        
+        def objective(agents):
+            if agents <= 0:
+                return float('inf')
+            effective_agents = agents * parallel_capacity * effectiveness
+            sl = service_level_erlang_c(forecast, avg_aht, effective_agents, awt)
+            return abs(sl - sl_target)
+        
+        traffic = forecast * avg_aht
+        result = optimize.minimize_scalar(objective, bounds=(0.1, traffic), method='bounded')
+        return max(1, round(result.x, 1))
+    
     @staticmethod
-    def required_agents(traffic, aht, target_service, target_time=20):
-        """Find minimum agents to hit target service level.
-
-        Parameters
-        ----------
-        traffic : float
-            Offered traffic in erlangs.
-        aht : float
-            Average handle time (seconds).
-        target_service : float
-            Desired service level (0-1).
-        target_time : float, optional
-            Threshold time in seconds, by default ``20``.
-        """
-        def objective(n):
-            return abs(CHAT.service_level(traffic, int(n[0]), aht, target_time) - target_service)
-
-        res = minimize(objective, x0=[traffic], bounds=[(traffic, traffic * 10)])
-        return int(np.ceil(res.x[0]))
+    def asa(forecast, aht_list, agents, lines, patience):
+        parallel_capacity = len(aht_list)
+        avg_aht = sum(aht_list) / len(aht_list)
+        effectiveness = 0.7 + (0.3 / parallel_capacity)
+        effective_agents = agents * parallel_capacity * effectiveness
+        return waiting_time_erlang_c(forecast, avg_aht, effective_agents)
 
 class BL:
-    """Advanced analysis tools."""
-
+    """Módulo Blending"""
+    
     @staticmethod
-    def sensitivity(traffic_range, agents, aht, target):
-        rows = []
-        for t in traffic_range:
-            sl = CHAT.service_level(t, agents, aht, target)
-            rows.append({'traffic': t, 'service_level': sl})
-        return pd.DataFrame(rows)
-
+    def sla(forecast, aht, agents, awt, lines, patience, threshold):
+        available_agents = max(0, agents - threshold)
+        if available_agents <= 0:
+            return 0.0
+        return service_level_erlang_c(forecast, aht, available_agents, awt)
+    
     @staticmethod
-    def monte_carlo(mean_traffic, agents, aht, target, iters=1000):
-        samples = np.random.poisson(mean_traffic, size=iters)
-        results = [CHAT.service_level(s, agents, aht, target) for s in samples]
-        return pd.Series(results)
-
-    class AGENTS:
-        """Utility functions for staffing based on occupancy."""
-
-        @staticmethod
-        def for_occupancy(traffic: float, max_occupancy: float) -> int:
-            """Return agents required so occupancy <= ``max_occupancy``."""
-
-            if not 0 < max_occupancy <= 1:
-                raise ValueError("max_occupancy must be in (0, 1]")
-            return int(np.ceil(traffic / max_occupancy))
-
-
-
-def run_app():
-    """Launch Streamlit UI with multi-chat and analysis tools."""
-    import streamlit as st
-    st.title("Erlang Calculator")
-    st.sidebar.header("Inputs")
-    traffic = st.sidebar.number_input("Traffic Intensity (erlangs)", value=5.0)
-    agents = st.sidebar.number_input("Agents", value=5, step=1)
-    concurrency = st.sidebar.number_input(
-        "Concurrent Chats per Agent", value=1, min_value=1, step=1
-    )
-    effective_agents = int(agents * concurrency)
-    aht = st.sidebar.number_input("Average Handle Time (seconds)", value=180)
-    target = st.sidebar.number_input("Service Level Target (seconds)", value=20)
-
-    if st.sidebar.button("Compute"):
-        b = X.erlang_b(traffic, effective_agents)
-        c = X.erlang_c(traffic, effective_agents)
-        sl = CHAT.service_level(traffic, effective_agents, aht, target)
-        asa = CHAT.asa(traffic, effective_agents, aht)
-        st.write("### Results")
-        st.write(f"Erlang B Blocking: {b:.4f}")
-        st.write(f"Erlang C Waiting: {c:.4f}")
-        st.write(f"Service Level: {sl:.4f}")
-        st.write(f"ASA: {asa:.2f} seconds")
-
-    st.sidebar.header("Sensitivity Analysis")
-    sens_start = st.sidebar.number_input(
-        "Traffic Range Start", value=max(0.0, traffic - 3.0)
-    )
-    sens_end = st.sidebar.number_input("Traffic Range End", value=traffic + 3.0)
-    sens_points = st.sidebar.number_input(
-        "Points", min_value=5, value=20, step=1
-    )
-    if st.sidebar.button("Run Sensitivity"):
-        tf_range = np.linspace(sens_start, sens_end, int(sens_points))
-        df = BL.sensitivity(tf_range, effective_agents, aht, target)
-        st.line_chart(df.set_index("traffic"))
-
-    st.sidebar.header("Monte Carlo")
-    mc_mean = st.sidebar.number_input("Mean Traffic", value=traffic)
-    iters = st.sidebar.number_input("Iterations", value=500, step=100)
-    if st.sidebar.button("Run Monte Carlo"):
-        series = BL.monte_carlo(mc_mean, effective_agents, aht, target, int(iters))
-        st.write(series.describe())
-        counts, bins = np.histogram(series, bins=20)
-        st.bar_chart(pd.DataFrame({"count": counts}, index=bins[:-1]))
-
-    st.sidebar.header("Staffing Optimization")
-    svc_target = st.sidebar.slider("Target Service Level", 0.5, 0.99, 0.8)
-    if st.sidebar.button("Optimize Staffing"):
-        required = CHAT.required_agents(traffic, aht, svc_target, target)
-        physical_agents = int(np.ceil(required / concurrency))
-        st.write(f"Required Agents (with concurrency): {physical_agents}")
+    def outbound_capacity(forecast, aht, agents, lines, patience, threshold, outbound_aht):
+        inbound_traffic = forecast * aht
+        inbound_agents_needed = inbound_traffic + threshold
+        outbound_agents = max(0, agents - inbound_agents_needed)
+        return max(0, outbound_agents / outbound_aht)
+    
+    @staticmethod
+    def optimal_threshold(forecast, aht, agents, awt, lines, patience, sl_target):
+        def objective(threshold):
+            if threshold < 0 or threshold > agents:
+                return float('inf')
+            sl = BL.sla(forecast, aht, agents, awt, lines, patience, threshold)
+            return abs(sl - sl_target)
+        
+        result = optimize.minimize_scalar(objective, bounds=(0, agents), method='bounded')
+        return max(0, round(result.x, 1))
 
 # =============================================================================
-# EJEMPLOS PRÁCTICOS - ERLANG CALCULATOR
-# Casos de uso reales para centros de contacto
+# INTERFAZ STREAMLIT
 # =============================================================================
 
-class ErlangAnalyzer:
-    """Herramientas para análisis completos de centros de contacto."""
-
-    def __init__(self) -> None:
-        self.results = {}
-
-    def dimensioning_analysis(self, forecast, aht, target_sl=0.80, awt=20):
-        """Análisis completo de dimensionamiento."""
-        print("\U0001F4CA ANÁLISIS DE DIMENSIONAMIENTO")
-        print("=" * 50)
-
-        agents_needed = X.AGENTS.SLA.__new__(X.AGENTS.SLA, target_sl, forecast, aht, awt)
-
-        agent_range = range(int(agents_needed * 0.8), int(agents_needed * 1.3))
-        results = []
-
-        for agents in agent_range:
-            sl = X.SLA.__new__(X.SLA, forecast, aht, agents, awt)
-            asa = X.ASA.__new__(X.ASA, forecast, aht, agents)
-            occupancy = X.OCCUPANCY.__new__(X.OCCUPANCY, forecast, aht, agents)
-
-            results.append({
-                "Agents": agents,
-                "Service_Level": sl,
-                "ASA_seconds": asa * 60,
-                "Occupancy": occupancy,
-                "Cost_Score": agents * (1 - sl),
-            })
-
-        df = pd.DataFrame(results)
-
-        print("\n\U0001F3AF RECOMENDACIÓN ÓPTIMA:")
-        print(f"Agentes recomendados: {agents_needed}")
-        print(f"Service Level objetivo: {target_sl:.0%}")
-        print(f"AWT máximo: {awt} segundos")
-
-        optimal = df.loc[df["Cost_Score"].idxmin()]
-        print("\n\u26A1 CONFIGURACIÓN ÓPTIMA:")
-        print(f"Agentes: {optimal['Agents']}")
-        print(f"Service Level: {optimal['Service_Level']:.1%}")
-        print(f"ASA: {optimal['ASA_seconds']:.1f} segundos")
-        print(f"Ocupación: {optimal['Occupancy']:.1%}")
-
-        return df
-
-    def what_if_analysis(self, base_forecast, base_aht, base_agents):
-        """Análisis de escenarios 'Qué pasaría si...?'."""
-        print("\n\U0001F52E ANÁLISIS DE ESCENARIOS")
-        print("=" * 50)
-
-        scenarios = [
-            {"name": "Escenario Base", "forecast": base_forecast, "aht": base_aht, "agents": base_agents},
-            {"name": "↗️ +20% Volumen", "forecast": base_forecast * 1.2, "aht": base_aht, "agents": base_agents},
-            {"name": "⏱️ +10% AHT", "forecast": base_forecast, "aht": base_aht * 1.1, "agents": base_agents},
-            {"name": "👥 +2 Agentes", "forecast": base_forecast, "aht": base_aht, "agents": base_agents + 2},
-            {"name": "💥 Crisis (Volumen +50%)", "forecast": base_forecast * 1.5, "aht": base_aht * 1.2, "agents": base_agents},
-        ]
-
-        results = []
-        for scenario in scenarios:
-            sl = X.SLA.__new__(X.SLA, scenario["forecast"], scenario["aht"], scenario["agents"], 20)
-            asa = X.ASA.__new__(X.ASA, scenario["forecast"], scenario["aht"], scenario["agents"])
-            occ = X.OCCUPANCY.__new__(X.OCCUPANCY, scenario["forecast"], scenario["aht"], scenario["agents"])
-
-            results.append({
-                "Escenario": scenario["name"],
-                "Forecast": scenario["forecast"],
-                "AHT": scenario["aht"],
-                "Agentes": scenario["agents"],
-                "Service_Level": f"{sl:.1%}",
-                "ASA_min": f"{asa:.1f}",
-                "Ocupación": f"{occ:.1%}",
-            })
-
-        df = pd.DataFrame(results)
-        print(df.to_string(index=False))
-        return df
-
-    def compare_models(self, forecast, aht, agents, awt=20):
-        """Comparación entre diferentes modelos de Erlang."""
-        print("\n⚖️ COMPARACIÓN DE MODELOS")
-        print("=" * 50)
-
-        basic_sl = X.SLA.__new__(X.SLA, forecast, aht, agents, awt)
-        basic_asa = X.ASA.__new__(X.ASA, forecast, aht, agents)
-
-        lines = int(agents * 1.2)
-        limited_sl = X.SLA.__new__(X.SLA, forecast, aht, agents, awt, lines)
-
-        patience = 120
-        abandon_sl = X.SLA.__new__(X.SLA, forecast, aht, agents, awt, lines, patience)
-        abandon_rate = X.ABANDON.__new__(X.ABANDON, forecast, aht, agents, lines, patience, 0.1)
-
-        chat_aht = [aht * 0.7, aht * 0.8, aht * 0.9]
-        chat_sl = CHAT.SLA.__new__(CHAT.SLA, forecast, chat_aht, agents, awt, lines, patience)
-
-        threshold = 2
-        blend_sl = BL.SLA.__new__(BL.SLA, forecast, aht, agents, awt, lines, patience, threshold)
-        outbound_capacity = BL.OUTBOUND.__new__(BL.OUTBOUND, forecast, aht, agents, lines, patience, threshold, aht)
-
-        print("🔹 ERLANG C (Básico)")
-        print(f"   Service Level: {basic_sl:.1%}")
-        print(f"   ASA: {basic_asa:.1f} minutos")
-
-        print(f"\n🔸 ERLANG C + LÍNEAS LIMITADAS ({lines} líneas)")
-        print(f"   Service Level: {limited_sl:.1%}")
-
-        print(f"\n🔺 ERLANG X + ABANDONMENT (Paciencia: {patience}s)")
-        print(f"   Service Level: {abandon_sl:.1%}")
-        print(f"   Abandonment Rate: {abandon_rate:.1%}")
-
-        print(f"\n💬 CHAT MODEL ({len(chat_aht)} chats simultáneos)")
-        print(f"   Service Level: {chat_sl:.1%}")
-
-        print(f"\n🗑️ BLENDING MODEL (Threshold: {threshold})")
-        print(f"   Service Level: {blend_sl:.1%}")
-        print(f"   Outbound Capacity: {outbound_capacity:.1f} llamadas/hora")
-
-        return {
-            "Erlang_C": basic_sl,
-            "Limited_Lines": limited_sl,
-            "With_Abandonment": abandon_sl,
-            "Chat_Model": chat_sl,
-            "Blending": blend_sl,
-        }
-
-    def staffing_optimization(self, hourly_forecast, aht, target_sl=0.80):
-        """Optimización de staffing por horas del día."""
-        print("\n⏰ OPTIMIZACIÓN DE STAFFING POR HORAS")
-        print("=" * 50)
-
-        hours = list(range(8, 20))
-        results = []
-        total_agents = 0
-
-        for hour, forecast in zip(hours, hourly_forecast):
-            agents_needed = X.AGENTS.SLA.__new__(X.AGENTS.SLA, target_sl, forecast, aht, 20)
-            sl_achieved = X.SLA.__new__(X.SLA, forecast, aht, agents_needed, 20)
-
-            results.append({
-                "Hora": f"{hour}:00",
-                "Forecast": forecast,
-                "Agentes_Necesarios": agents_needed,
-                "SL_Logrado": f"{sl_achieved:.1%}",
-            })
-
-            total_agents += agents_needed
-
-        df = pd.DataFrame(results)
-        print(df.to_string(index=False))
-
-        print("\n\U0001F4C8 RESUMEN STAFFING:")
-        print(f"Total agentes-hora necesarios: {total_agents}")
-        print(f"Pico máximo: {max([r['Agentes_Necesarios'] for r in results])} agentes")
-        print(f"Valle mínimo: {min([r['Agentes_Necesarios'] for r in results])} agentes")
-
-        return df
-
-
-class IndustryUseCases:
-    """Casos de uso específicos por industria."""
-
-    @staticmethod
-    def call_center_tradicional():
-        """Centro de llamadas tradicional - Servicio al cliente."""
-        print("📞 CASO: CALL CENTER TRADICIONAL")
-        print("Industria: Servicios Financieros")
-        print("=" * 50)
-
-        forecast = 150
-        aht = 4.5
-        target_sl = 0.80
-        awt = 20
-
-        analyzer = ErlangAnalyzer()
-        df = analyzer.dimensioning_analysis(forecast, aht, target_sl, awt)
-
-        print("\n\U0001F50D ANÁLISIS DE SENSIBILIDAD")
-        sensitivities = []
-        base_agents = X.AGENTS.SLA.__new__(X.AGENTS.SLA, target_sl, forecast, aht, awt)
-
-        for variation in [-20, -10, 0, 10, 20]:
-            new_forecast = forecast * (1 + variation / 100)
-            new_agents = X.AGENTS.SLA.__new__(X.AGENTS.SLA, target_sl, new_forecast, aht, awt)
-            sensitivities.append({
-                "Parámetro": f"Forecast {variation:+}%",
-                "Valor": f"{new_forecast:.0f}",
-                "Agentes": new_agents,
-                "Cambio": f"{new_agents - base_agents:+.1f}",
-            })
-
-        for variation in [-10, -5, 0, 5, 10]:
-            new_aht = aht * (1 + variation / 100)
-            new_agents = X.AGENTS.SLA.__new__(X.AGENTS.SLA, target_sl, forecast, new_aht, awt)
-            sensitivities.append({
-                "Parámetro": f"AHT {variation:+}%",
-                "Valor": f"{new_aht:.1f}min",
-                "Agentes": new_agents,
-                "Cambio": f"{new_agents - base_agents:+.1f}",
-            })
-
-        sens_df = pd.DataFrame(sensitivities)
-        print(sens_df.to_string(index=False))
-
-        return df, sens_df
-
-    @staticmethod
-    def chat_support():
-        """Soporte por chat - Agentes manejan múltiples conversaciones."""
-        print("\n💬 CASO: SOPORTE POR CHAT")
-        print("Industria: E-commerce")
-        print("=" * 50)
-
-        forecast = 200
-        chat_aht = [2, 2.5, 3.5, 5]
-        target_sl = 0.85
-        awt = 30
-        lines = 300
-        patience = 180
-
-        agents_needed = CHAT.AGENTS.SLA.__new__(CHAT.AGENTS.SLA, target_sl, forecast, chat_aht, awt, lines, patience)
-
-        configs = [
-            {"chats": 1, "aht": [2]},
-            {"chats": 2, "aht": [2, 2.5]},
-            {"chats": 3, "aht": [2, 2.5, 3.5]},
-            {"chats": 4, "aht": [2, 2.5, 3.5, 5]},
-        ]
-
-        results = []
-        for config in configs:
-            agents = CHAT.AGENTS.SLA.__new__(CHAT.AGENTS.SLA, target_sl, forecast, config["aht"], awt, lines, patience)
-            sl = CHAT.SLA.__new__(CHAT.SLA, forecast, config["aht"], agents, awt, lines, patience)
-
-            results.append({
-                "Chats_Simultáneos": config["chats"],
-                "Agentes_Necesarios": agents,
-                "SL_Logrado": f"{sl:.1%}",
-                "Eficiencia": f"{forecast / agents:.1f} chats/agente/hora",
-            })
-
-        chat_df = pd.DataFrame(results)
-        print("\n\U0001F4C8 COMPARACIÓN POR NÚMERO DE CHATS SIMULTÁNEOS:")
-        print(chat_df.to_string(index=False))
-
-        print("\n\U0001F3AF RECOMENDACIÓN:")
-        optimal = min(results, key=lambda x: x["Agentes_Necesarios"])
-        print(f"Configuración óptima: {optimal['Chats_Simultáneos']} chats simultáneos")
-        print(f"Agentes necesarios: {optimal['Agentes_Necesarios']}")
-        print(f"Eficiencia: {optimal['Eficiencia']}")
-
-        return chat_df
-
-    @staticmethod
-    def blended_operation():
-        """Operación mixta - Inbound + Outbound."""
-        print("\n🗝 CASO: OPERACIÓN BLENDED")
-        print("Industria: Ventas + Soporte")
-        print("=" * 50)
-
-        inbound_forecast = 120
-        inbound_aht = 3.5
-        outbound_aht = 5.0
-        target_sl = 0.75
-        awt = 20
-        total_agents = 25
-
-        thresholds = range(0, 8)
-        results = []
-
-        for threshold in thresholds:
-            sl = BL.SLA.__new__(BL.SLA, inbound_forecast, inbound_aht, total_agents, awt, 100, 300, threshold)
-            outbound_capacity = BL.OUTBOUND.__new__(BL.OUTBOUND, inbound_forecast, inbound_aht, total_agents, 100, 300, threshold, outbound_aht)
-
-            results.append({
-                "Threshold": threshold,
-                "SL_Inbound": f"{sl:.1%}",
-                "Outbound_Capacity": f"{outbound_capacity:.1f}",
-                "Total_Productivity": outbound_capacity + (sl * 100),
-            })
-
-        blend_df = pd.DataFrame(results)
-        print("\n\U0001F4C8 ANÁLISIS DE THRESHOLD ÓPTIMO:")
-        print(blend_df.to_string(index=False))
-
-        optimal_threshold = max(results, key=lambda x: x["Total_Productivity"])["Threshold"]
-
-        print(f"\n\U0001F3AF THRESHOLD ÓPTIMO: {optimal_threshold} agentes")
-        print(f"Con {total_agents} agentes totales:")
-        print(f"- Agentes disponibles para inbound: {total_agents - optimal_threshold}")
-        print(f"- Agentes de reserva: {optimal_threshold}")
-
-        return blend_df
-
-
-class AdvancedAnalytics:
-    """Herramientas de análisis avanzado."""
-
-    @staticmethod
-    def monte_carlo_simulation(forecast_mean, forecast_std, aht_mean, aht_std, agents, iterations=1000):
-        """Simulación Monte Carlo para análisis de riesgo."""
-        import numpy as np
-
-        print("\n🎲 SIMULACIÓN MONTE CARLO")
-        print("=" * 50)
-
-        results = []
-
-        for _ in range(iterations):
-            forecast = max(1, np.random.normal(forecast_mean, forecast_std))
-            aht = max(0.1, np.random.normal(aht_mean, aht_std))
-
-            sl = X.SLA.__new__(X.SLA, forecast, aht, agents, 20)
-            asa = X.ASA.__new__(X.ASA, forecast, aht, agents)
-            occ = X.OCCUPANCY.__new__(X.OCCUPANCY, forecast, aht, agents)
-
-            results.append({
-                "forecast": forecast,
-                "aht": aht,
-                "sl": sl,
-                "asa": asa,
-                "occupancy": occ,
-            })
-
-        sl_values = [r["sl"] for r in results]
-        asa_values = [r["asa"] for r in results]
-
-        print(f"\U0001F4CA RESULTADOS ({iterations} simulaciones):")
-        print("\nService Level:")
-        print(f"  Media: {np.mean(sl_values):.1%}")
-        print(f"  Desv. Std: {np.std(sl_values):.1%}")
-        print(f"  P5: {np.percentile(sl_values, 5):.1%}")
-        print(f"  P95: {np.percentile(sl_values, 95):.1%}")
-
-        print("\nASA (minutos):")
-        print(f"  Media: {np.mean(asa_values):.2f}")
-        print(f"  Desv. Std: {np.std(asa_values):.2f}")
-        print(f"  P95: {np.percentile(asa_values, 95):.2f}")
-
-        prob_sl_80 = sum(1 for sl in sl_values if sl >= 0.80) / len(sl_values)
-        prob_asa_30 = sum(1 for asa in asa_values if asa <= 0.5) / len(asa_values)
-
-        print("\n\U0001F3AF PROBABILIDADES:")
-        print(f"  SL ≥ 80%: {prob_sl_80:.1%}")
-        print(f"  ASA ≤ 30seg: {prob_asa_30:.1%}")
-
-        return results
-
-    @staticmethod
-    def capacity_planning(current_forecast, growth_rate, periods=12):
-        """Planificación de capacidad a futuro."""
-        print("\n\U0001F4C8 PLANIFICACIÓN DE CAPACIDAD")
-        print(f"Crecimiento proyectado: {growth_rate:.1%} mensual")
-        print("=" * 50)
-
-        results = []
-        aht = 4.0
-        target_sl = 0.80
-
-        for period in range(1, periods + 1):
-            forecast = current_forecast * (1 + growth_rate) ** period
-            agents_needed = X.AGENTS.SLA.__new__(X.AGENTS.SLA, target_sl, forecast, aht, 20)
-
-            results.append({
-                "Mes": period,
-                "Forecast": f"{forecast:.0f}",
-                "Agentes_Necesarios": agents_needed,
-                "Incremento": agents_needed - (
-                    results[-1]["Agentes_Necesarios"]
-                    if results
-                    else X.AGENTS.SLA.__new__(X.AGENTS.SLA, target_sl, current_forecast, aht, 20)
-                ),
-            })
-
-        capacity_df = pd.DataFrame(results)
-        print(capacity_df.to_string(index=False))
-
-        total_growth = results[-1]["Agentes_Necesarios"] - X.AGENTS.SLA.__new__(X.AGENTS.SLA, target_sl, current_forecast, aht, 20)
-        print(f"\n\U0001F4CA RESUMEN {periods} MESES:")
-        print(f"Crecimiento total de agentes: +{total_growth}")
-        print(f"Inversión estimada mensual: ${total_growth * 3000 / periods:,.0f} USD")
-
-        return capacity_df
-
-
-def run_complete_analysis():
-    """Ejecuta un análisis completo con todos los módulos."""
-    print("\U0001F680 ANÁLISIS COMPLETO DE CENTRO DE CONTACTO")
-    print("=" * 70)
-
-    print("\n" + "=" * 70)
-    IndustryUseCases.call_center_tradicional()
-
-    print("\n" + "=" * 70)
-    IndustryUseCases.chat_support()
-
-    print("\n" + "=" * 70)
-    IndustryUseCases.blended_operation()
-
-    print("\n" + "=" * 70)
-    AdvancedAnalytics.monte_carlo_simulation(
-        forecast_mean=150,
-        forecast_std=20,
-        aht_mean=4.0,
-        aht_std=0.5,
-        agents=35,
+def main():
+    # Header
+    st.markdown('<h1 class="main-header">📞 Erlang Calculator Pro</h1>', unsafe_allow_html=True)
+    st.markdown("**Calculadora completa de Erlang para Centros de Contacto**")
+    st.markdown("---")
+    
+    # Sidebar para navegación
+    st.sidebar.title("🔧 Configuración")
+    
+    # Selección de módulo
+    module = st.sidebar.selectbox(
+        "📊 Seleccionar Módulo",
+        ["Erlang C/X", "Chat Multi-canal", "Blending", "Erlang O (Outbound)", "Análisis Comparativo", "Staffing Optimizer"]
     )
+    
+    if module == "Erlang C/X":
+        erlang_x_interface()
+    elif module == "Chat Multi-canal":
+        chat_interface()
+    elif module == "Blending":
+        blending_interface()
+    elif module == "Erlang O (Outbound)":
+        erlang_o_interface()
+    elif module == "Análisis Comparativo":
+        comparative_analysis()
+    elif module == "Staffing Optimizer":
+        staffing_optimizer()
 
-    print("\n" + "=" * 70)
-    AdvancedAnalytics.capacity_planning(
-        current_forecast=150,
-        growth_rate=0.05,
-        periods=12,
+def erlang_x_interface():
+    st.header("📈 Erlang C/X Calculator")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("📝 Parámetros de Entrada")
+        forecast = st.number_input("Forecast (llamadas/hora)", min_value=1.0, value=100.0, step=1.0)
+        aht = st.number_input("AHT (minutos)", min_value=0.1, value=4.0, step=0.1)
+        agents = st.number_input("Agentes", min_value=1.0, value=25.0, step=1.0)
+        awt = st.number_input("AWT (segundos)", min_value=1.0, value=20.0, step=1.0)
+        
+        # Parámetros opcionales
+        st.subheader("🔧 Parámetros Avanzados")
+        use_advanced = st.checkbox("Usar Erlang X (con abandonment)")
+        
+        lines = None
+        patience = None
+        
+        if use_advanced:
+            lines = st.number_input("Líneas disponibles", min_value=int(agents), value=int(agents*1.2), step=1)
+            patience = st.number_input("Patience (segundos)", min_value=1.0, value=120.0, step=1.0)
+    
+    with col2:
+        st.subheader("📊 Resultados")
+        
+        # Calcular métricas
+        sl = X.SLA.calculate(forecast, aht, agents, awt, lines, patience)
+        asa = X.asa(forecast, aht, agents)
+        occ = X.occupancy(forecast, aht, agents)
+        
+        # Mostrar métricas
+        sl_class = "success-metric" if sl >= 0.8 else "warning-metric" if sl >= 0.7 else "danger-metric"
+        asa_class = "success-metric" if asa <= 0.5 else "warning-metric" if asa <= 1.0 else "danger-metric"
+        occ_class = "success-metric" if 0.7 <= occ <= 0.85 else "warning-metric"
+        
+        st.markdown(f"""
+        <div class="metric-card {sl_class}">
+            <h3>Service Level</h3>
+            <h2>{sl:.1%}</h2>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.markdown(f"""
+        <div class="metric-card {asa_class}">
+            <h3>ASA (Average Speed of Answer)</h3>
+            <h2>{asa:.2f} min</h2>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.markdown(f"""
+        <div class="metric-card {occ_class}">
+            <h3>Ocupación</h3>
+            <h2>{occ:.1%}</h2>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        if use_advanced and lines and patience:
+            abandon_rate = X.abandonment(forecast, aht, agents, lines, patience)
+            abandon_class = "success-metric" if abandon_rate <= 0.05 else "warning-metric" if abandon_rate <= 0.1 else "danger-metric"
+            
+            st.markdown(f"""
+            <div class="metric-card {abandon_class}">
+                <h3>Abandonment Rate</h3>
+                <h2>{abandon_rate:.1%}</h2>
+            </div>
+            """, unsafe_allow_html=True)
+    
+    # Análisis de dimensionamiento
+    st.subheader("🎯 Análisis de Dimensionamiento")
+    
+    target_sl = st.slider("Service Level Objetivo", 0.7, 0.95, 0.8, 0.01)
+    recommended_agents = X.AGENTS.for_sla(target_sl, forecast, aht, awt, lines, patience)
+    
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Agentes Recomendados", f"{recommended_agents}")
+    col2.metric("Agentes Actuales", f"{agents}")
+    col3.metric("Diferencia", f"{recommended_agents - agents:+}")
+    
+    # Gráfico de sensibilidad
+    st.subheader("📈 Análisis de Sensibilidad")
+    
+    agent_range = range(max(1, int(recommended_agents * 0.7)), int(recommended_agents * 1.5))
+    sl_data = []
+    asa_data = []
+    occ_data = []
+    
+    for a in agent_range:
+        sl_val = X.SLA.calculate(forecast, aht, a, awt, lines, patience)
+        asa_val = X.asa(forecast, aht, a)
+        occ_val = X.occupancy(forecast, aht, a)
+        
+        sl_data.append(sl_val)
+        asa_data.append(asa_val)
+        occ_data.append(occ_val)
+    
+    # Crear gráfico
+    fig = go.Figure()
+    
+    fig.add_trace(go.Scatter(
+        x=list(agent_range),
+        y=sl_data,
+        mode='lines+markers',
+        name='Service Level',
+        yaxis='y',
+        line=dict(color='blue')
+    ))
+    
+    fig.add_trace(go.Scatter(
+        x=list(agent_range),
+        y=asa_data,
+        mode='lines+markers',
+        name='ASA (min)',
+        yaxis='y2',
+        line=dict(color='red')
+    ))
+    
+    fig.update_layout(
+        title="Service Level vs Capacidad Outbound por Threshold",
+        xaxis_title="Threshold (Agentes Reservados)",
+        yaxis=dict(title="Service Level Inbound", side="left", range=[0, 1]),
+        yaxis2=dict(title="Capacidad Outbound (llamadas/hora)", side="right", overlaying="y"),
+        hovermode='x unified'
     )
+    
+    # Líneas de referencia
+    fig.add_vline(x=threshold, line_dash="dash", line_color="red", annotation_text="Actual")
+    fig.add_vline(x=optimal_threshold, line_dash="dash", line_color="orange", annotation_text="Óptimo")
+    
+    st.plotly_chart(fig, use_container_width=True)
 
+def erlang_o_interface():
+    st.header("📞 Erlang O - Outbound Calculator")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("📝 Parámetros Outbound")
+        agents_out = st.number_input("Agentes Outbound", min_value=1, value=20, step=1)
+        hours_per_day = st.number_input("Horas por día", min_value=1.0, value=8.0, step=0.5)
+        calls_per_hour = st.number_input("Llamadas por hora por agente", min_value=1.0, value=25.0, step=1.0)
+        success_rate = st.slider("Tasa de éxito (contactos efectivos)", 0.1, 0.8, 0.3, 0.01)
+        
+        st.subheader("🎯 Configuración de Objetivos")
+        target_daily_calls = st.number_input("Objetivo llamadas exitosas/día", min_value=1, value=500, step=10)
+        
+        st.subheader("🤖 Predictive Dialer")
+        answer_rate = st.slider("Tasa de respuesta", 0.1, 0.5, 0.25, 0.01)
+        talk_time = st.number_input("Tiempo promedio conversación (min)", min_value=1.0, value=5.0, step=0.5)
+        wait_between = st.number_input("Tiempo entre llamadas (min)", min_value=0.5, value=2.0, step=0.5)
+    
+    with col2:
+        st.subheader("📊 Resultados Outbound")
+        
+        # Calcular productividad
+        productivity = ERLANG_O.productivity(agents_out, hours_per_day, calls_per_hour, success_rate)
+        agents_needed = ERLANG_O.agents_for_target(target_daily_calls, hours_per_day, calls_per_hour, success_rate)
+        dialer_ratio = ERLANG_O.dialer_ratio(answer_rate, talk_time, wait_between)
+        
+        st.markdown(f"""
+        <div class="metric-card success-metric">
+            <h3>Llamadas Totales/Día</h3>
+            <h2>{productivity['total_calls']:.0f}</h2>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.markdown(f"""
+        <div class="metric-card">
+            <h3>Llamadas Exitosas/Día</h3>
+            <h2>{productivity['successful_calls']:.0f}</h2>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.markdown(f"""
+        <div class="metric-card">
+            <h3>Productividad/Agente/Día</h3>
+            <h2>{productivity['successful_per_agent_day']:.1f} exitosas</h2>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.markdown(f"""
+        <div class="metric-card warning-metric">
+            <h3>Agentes Necesarios (Objetivo)</h3>
+            <h2>{agents_needed}</h2>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.markdown(f"""
+        <div class="metric-card">
+            <h3>Ratio Predictive Dialer</h3>
+            <h2>{dialer_ratio:.2f}:1</h2>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # Análisis de ROI
+    st.subheader("💰 Análisis de ROI")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        cost_per_agent = st.number_input("Costo/agente/día ($)", min_value=1.0, value=150.0, step=10.0)
+        revenue_per_success = st.number_input("Ingreso/llamada exitosa ($)", min_value=1.0, value=50.0, step=5.0)
+    
+    with col2:
+        total_cost = agents_out * cost_per_agent
+        total_revenue = productivity['successful_calls'] * revenue_per_success
+        profit = total_revenue - total_cost
+        roi = (profit / total_cost) * 100 if total_cost > 0 else 0
+        
+        st.metric("Costo Total/Día", f"${total_cost:,.0f}")
+        st.metric("Ingresos/Día", f"${total_revenue:,.0f}")
+    
+    with col3:
+        profit_color = "success-metric" if profit > 0 else "danger-metric"
+        
+        st.markdown(f"""
+        <div class="metric-card {profit_color}">
+            <h3>Ganancia/Día</h3>
+            <h2>${profit:,.0f}</h2>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.markdown(f"""
+        <div class="metric-card">
+            <h3>ROI</h3>
+            <h2>{roi:.1f}%</h2>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # Gráfico de productividad vs agentes
+    st.subheader("📈 Productividad vs Número de Agentes")
+    
+    agent_range_out = range(1, 51)
+    calls_data = []
+    success_data = []
+    profit_data = []
+    
+    for a in agent_range_out:
+        prod = ERLANG_O.productivity(a, hours_per_day, calls_per_hour, success_rate)
+        cost = a * cost_per_agent
+        revenue = prod['successful_calls'] * revenue_per_success
+        profit_val = revenue - cost
+        
+        calls_data.append(prod['total_calls'])
+        success_data.append(prod['successful_calls'])
+        profit_data.append(profit_val)
+    
+    fig = go.Figure()
+    
+    fig.add_trace(go.Scatter(
+        x=list(agent_range_out),
+        y=success_data,
+        mode='lines+markers',
+        name='Llamadas Exitosas/Día',
+        yaxis='y',
+        line=dict(color='blue')
+    ))
+    
+    fig.add_trace(go.Scatter(
+        x=list(agent_range_out),
+        y=profit_data,
+        mode='lines+markers',
+        name='Ganancia/Día ($)',
+        yaxis='y2',
+        line=dict(color='green')
+    ))
+    
+    fig.update_layout(
+        title="Productividad y Ganancia vs Número de Agentes",
+        xaxis_title="Número de Agentes",
+        yaxis=dict(title="Llamadas Exitosas/Día", side="left"),
+        yaxis2=dict(title="Ganancia/Día ($)", side="right", overlaying="y"),
+        hovermode='x unified'
+    )
+    
+    fig.add_vline(x=agents_out, line_dash="dash", line_color="red", annotation_text="Actual")
+    fig.add_vline(x=agents_needed, line_dash="dash", line_color="orange", annotation_text="Objetivo")
+    
+    st.plotly_chart(fig, use_container_width=True)
+
+def comparative_analysis():
+    st.header("⚖️ Análisis Comparativo de Modelos")
+    
+    # Parámetros comunes
+    st.subheader("📝 Parámetros Base")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        forecast_comp = st.number_input("Forecast común", min_value=1.0, value=150.0, step=1.0)
+        aht_comp = st.number_input("AHT común (min)", min_value=0.1, value=4.0, step=0.1)
+    
+    with col2:
+        agents_comp = st.number_input("Agentes común", min_value=1.0, value=30.0, step=1.0)
+        awt_comp = st.number_input("AWT común (seg)", min_value=1.0, value=20.0, step=1.0)
+    
+    with col3:
+        lines_comp = int(agents_comp * 1.2)
+        patience_comp = 180.0
+        st.metric("Líneas", lines_comp)
+        st.metric("Patience (seg)", patience_comp)
+    
+    # Comparación de resultados
+    st.subheader("📊 Comparación de Resultados")
+    
+    # Erlang C básico
+    sl_basic = X.SLA.calculate(forecast_comp, aht_comp, agents_comp, awt_comp)
+    asa_basic = X.asa(forecast_comp, aht_comp, agents_comp)
+    occ_basic = X.occupancy(forecast_comp, aht_comp, agents_comp)
+    
+    # Erlang X con abandonment
+    sl_abandon = X.SLA.calculate(forecast_comp, aht_comp, agents_comp, awt_comp, lines_comp, patience_comp)
+    abandon_rate = X.abandonment(forecast_comp, aht_comp, agents_comp, lines_comp, patience_comp)
+    
+    # Chat modelo
+    chat_aht_comp = [aht_comp * 0.7, aht_comp * 0.8, aht_comp * 0.9]
+    sl_chat = CHAT.sla(forecast_comp, chat_aht_comp, agents_comp, awt_comp, lines_comp, patience_comp)
+    asa_chat = CHAT.asa(forecast_comp, chat_aht_comp, agents_comp, lines_comp, patience_comp)
+    
+    # Blending modelo
+    threshold_comp = 3
+    sl_blend = BL.sla(forecast_comp, aht_comp, agents_comp, awt_comp, lines_comp, patience_comp, threshold_comp)
+    outbound_cap = BL.outbound_capacity(forecast_comp, aht_comp, agents_comp, lines_comp, patience_comp, threshold_comp, aht_comp)
+    
+    # Crear tabla comparativa
+    comparison_data = {
+        'Modelo': ['Erlang C', 'Erlang X', 'Chat Multi-canal', 'Blending'],
+        'Service Level': [f"{sl_basic:.1%}", f"{sl_abandon:.1%}", f"{sl_chat:.1%}", f"{sl_blend:.1%}"],
+        'ASA (min)': [f"{asa_basic:.2f}", f"{asa_basic:.2f}", f"{asa_chat:.2f}", f"{asa_basic:.2f}"],
+        'Ocupación': [f"{occ_basic:.1%}", f"{occ_basic:.1%}", f"{occ_basic:.1%}", f"{occ_basic:.1%}"],
+        'Características': [
+            'Modelo básico, sin abandonment',
+            f'Con abandonment ({abandon_rate:.1%})',
+            f'Multi-chat ({len(chat_aht_comp)} simultáneos)',
+            f'Outbound: {outbound_cap:.0f} llamadas/h'
+        ]
+    }
+    
+    df_comparison = pd.DataFrame(comparison_data)
+    st.dataframe(df_comparison, use_container_width=True)
+    
+    # Gráfico comparativo
+    models = comparison_data['Modelo']
+    sl_values = [sl_basic, sl_abandon, sl_chat, sl_blend]
+    
+    fig = px.bar(
+        x=models,
+        y=sl_values,
+        title="Comparación de Service Level por Modelo",
+        labels={'x': 'Modelo', 'y': 'Service Level'},
+        color=sl_values,
+        color_continuous_scale='Blues'
+    )
+    
+    fig.add_hline(y=0.8, line_dash="dash", line_color="red", annotation_text="Objetivo 80%")
+    
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # Recomendaciones
+    st.subheader("🎯 Recomendaciones")
+    
+    best_sl = max(sl_values)
+    best_model = models[sl_values.index(best_sl)]
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.success(f"**Mejor Service Level:** {best_model} ({best_sl:.1%})")
+        
+        if sl_chat > sl_basic:
+            st.info("💬 **Chat Multi-canal** mejora la eficiencia permitiendo múltiples conversaciones simultáneas")
+        
+        if sl_abandon < sl_basic:
+            st.warning("⚠️ **Erlang X** muestra el impacto real del abandonment en el service level")
+    
+    with col2:
+        st.info(f"🔄 **Blending** permite capacidad outbound adicional: {outbound_cap:.0f} llamadas/hora")
+        
+        if any(sl < 0.8 for sl in sl_values):
+            st.error("❌ Algunos modelos no alcanzan el objetivo del 80%")
+        else:
+            st.success("✅ Todos los modelos superan el objetivo del 80%")
+
+def staffing_optimizer():
+    st.header("📅 Staffing Optimizer")
+    
+    # Configuración de horarios
+    st.subheader("⏰ Configuración de Horarios")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        start_hour = st.selectbox("Hora inicio", range(0, 24), index=8)
+        end_hour = st.selectbox("Hora fin", range(start_hour + 1, 25), index=20)
+        aht_staff = st.number_input("AHT (minutos)", min_value=0.1, value=4.0, step=0.1, key="aht_staff")
+        target_sl_staff = st.slider("Service Level objetivo", 0.7, 0.95, 0.8, 0.01, key="sl_staff")
+    
+    with col2:
+        st.subheader("📈 Patrón de Demanda")
+        pattern_type = st.selectbox("Tipo de patrón", ["Manual", "Típico Call Center", "E-commerce", "Soporte Técnico"])
+    
+    # Generar forecast por horas
+    hours = list(range(start_hour, end_hour))
+    
+    if pattern_type == "Manual":
+        st.subheader("📝 Ingreso Manual de Forecast")
+        forecasts = []
+        cols = st.columns(4)
+        for i, hour in enumerate(hours):
+            with cols[i % 4]:
+                forecast_val = st.number_input(f"{hour:02d}:00", min_value=1.0, value=100.0, step=1.0, key=f"hour_{hour}")
+                forecasts.append(forecast_val)
+    
+    else:
+        # Patrones predefinidos
+        if pattern_type == "Típico Call Center":
+            # Pico en la mañana y tarde
+            base_forecast = 80
+            pattern = [0.6, 0.8, 1.0, 1.2, 1.1, 0.9, 0.8, 1.0, 1.3, 1.1, 0.9, 0.7]
+        elif pattern_type == "E-commerce":
+            # Más actividad en la tarde/noche
+            base_forecast = 120
+            pattern = [0.5, 0.7, 0.9, 1.1, 1.3, 1.2, 1.0, 0.8, 0.9, 1.1, 1.4, 1.2]
+        else:  # Soporte Técnico
+            # Distribución más uniforme
+            base_forecast = 90
+            pattern = [0.8, 0.9, 1.0, 1.1, 1.0, 0.9, 0.8, 0.9, 1.0, 1.1, 1.0, 0.9]
+        
+        forecasts = [base_forecast * pattern[i % len(pattern)] for i in range(len(hours))]
+        
+        # Mostrar patrón
+        fig_pattern = px.line(
+            x=hours,
+            y=forecasts,
+            title=f"Patrón de Demanda - {pattern_type}",
+            labels={'x': 'Hora', 'y': 'Forecast (llamadas/hora)'}
+        )
+        st.plotly_chart(fig_pattern, use_container_width=True)
+    
+    # Calcular staffing
+    st.subheader("👥 Resultado de Staffing")
+    
+    staffing_results = []
+    total_agent_hours = 0
+    
+    for hour, forecast in zip(hours, forecasts):
+        agents_needed = X.AGENTS.for_sla(target_sl_staff, forecast, aht_staff, 20)
+        sl_achieved = X.SLA.calculate(forecast, aht_staff, agents_needed, 20)
+        asa_achieved = X.asa(forecast, aht_staff, agents_needed)
+        
+        staffing_results.append({
+            'Hora': f"{hour:02d}:00",
+            'Forecast': f"{forecast:.0f}",
+            'Agentes': agents_needed,
+            'SL': f"{sl_achieved:.1%}",
+            'ASA': f"{asa_achieved:.1f} min"
+        })
+        
+        total_agent_hours += agents_needed
+    
+    df_staffing = pd.DataFrame(staffing_results)
+    st.dataframe(df_staffing, use_container_width=True)
+    
+    # Métricas resumen
+    col1, col2, col3, col4 = st.columns(4)
+    
+    max_agents = max([r['Agentes'] for r in staffing_results])
+    min_agents = min([r['Agentes'] for r in staffing_results])
+    avg_agents = total_agent_hours / len(hours)
+    
+    col1.metric("Agentes Pico", max_agents)
+    col2.metric("Agentes Valle", min_agents)
+    col3.metric("Promedio", f"{avg_agents:.1f}")
+    col4.metric("Total Agente-Horas", total_agent_hours)
+    
+    # Gráfico de staffing
+    fig_staffing = go.Figure()
+    
+    fig_staffing.add_trace(go.Scatter(
+        x=hours,
+        y=forecasts,
+        mode='lines+markers',
+        name='Forecast',
+        yaxis='y',
+        line=dict(color='blue')
+    ))
+    
+    agents_values = [r['Agentes'] for r in staffing_results]
+    fig_staffing.add_trace(go.Scatter(
+        x=hours,
+        y=agents_values,
+        mode='lines+markers',
+        name='Agentes Necesarios',
+        yaxis='y2',
+        line=dict(color='red')
+    ))
+    
+    fig_staffing.update_layout(
+        title="Forecast vs Agentes Necesarios por Hora",
+        xaxis_title="Hora del Día",
+        yaxis=dict(title="Forecast (llamadas/hora)", side="left"),
+        yaxis2=dict(title="Agentes Necesarios", side="right", overlaying="y"),
+        hovermode='x unified'
+    )
+    
+    st.plotly_chart(fig_staffing, use_container_width=True)
+    
+    # Análisis de turnos
+    st.subheader("🔄 Análisis de Turnos")
+    
+    shift_analysis = st.checkbox("Realizar análisis de turnos")
+    
+    if shift_analysis:
+        shift_duration = st.selectbox("Duración del turno (horas)", [4, 6, 8], index=2)
+        
+        # Calcular turnos óptimos
+        shift_starts = []
+        for start in range(start_hour, end_hour - shift_duration + 1):
+            shift_end = start + shift_duration
+            shift_hours = list(range(start, shift_end))
+            shift_forecasts = [forecasts[h - start_hour] for h in shift_hours if h - start_hour < len(forecasts)]
+            
+            if shift_forecasts:
+                max_forecast = max(shift_forecasts)
+                agents_for_shift = X.AGENTS.for_sla(target_sl_staff, max_forecast, aht_staff, 20)
+                
+                shift_starts.append({
+                    'Turno': f"{start:02d}:00 - {shift_end:02d}:00",
+                    'Agentes': agents_for_shift,
+                    'Max_Forecast': f"{max_forecast:.0f}",
+                    'Cobertura': len(shift_forecasts)
+                })
+        
+        df_shifts = pd.DataFrame(shift_starts)
+        st.dataframe(df_shifts, use_container_width=True)
+        
+        # Recomendación de turnos
+        optimal_shifts = df_shifts.nsmallest(3, 'Agentes')
+        st.subheader("🎯 Turnos Recomendados")
+        st.dataframe(optimal_shifts, use_container_width=True)
+
+# =============================================================================
+# FUNCIONES AUXILIARES
+# =============================================================================
+
+def show_methodology():
+    with st.expander("📚 Metodología y Fórmulas"):
+        st.markdown("""
+        ### 🧮 Fórmulas Utilizadas
+        
+        **Erlang B (Probabilidad de Bloqueo):**
+        ```
+        B(A,N) = (A^N / N!) / Σ(k=0 to N)[A^k / k!]
+        ```
+        
+        **Erlang C (Probabilidad de Espera):**
+        ```
+        C(A,N) = [A^N / N!] / [Σ(k=0 to N-1)[A^k / k!] + (A^N / N!) * N/(N-A)]
+        ```
+        
+        **Service Level:**
+        ```
+        SL = 1 - C * e^(-(N-A)*t/AHT)
+        ```
+        
+        **ASA (Average Speed of Answer):**
+        ```
+        ASA = C * AHT / (N - A)
+        ```
+        
+        ### 📊 Modelos Implementados
+        
+        - **Erlang C**: Modelo básico sin abandonment
+        - **Erlang X**: Incluye abandonment y retrials
+        - **Chat Multi-canal**: Agentes manejan múltiples conversaciones
+        - **Blending**: Combinación inbound/outbound
+        - **Erlang O**: Campañas outbound puras
+        
+        ### 🎯 Interpretación de Métricas
+        
+        - **Service Level**: % de llamadas atendidas dentro del AWT objetivo
+        - **ASA**: Tiempo promedio de espera en cola
+        - **Ocupación**: % del tiempo que los agentes están ocupados
+        - **Abandonment**: % de clientes que cuelgan antes de ser atendidos
+        """)
+
+def main():
+    # Mostrar metodología al final
+    show_methodology()
 
 if __name__ == "__main__":
-    run_app()
+    main() ASA por Número de Agentes",
+        xaxis_title="Número de Agentes",
+        yaxis=dict(title="Service Level", side="left", range=[0, 1]),
+        yaxis2=dict(title="ASA (minutos)", side="right", overlaying="y"),
+        hovermode='x unified'
+    )
+    
+    # Línea vertical para agentes actuales
+    fig.add_vline(x=agents, line_dash="dash", line_color="green", annotation_text="Actual")
+    fig.add_vline(x=recommended_agents, line_dash="dash", line_color="orange", annotation_text="Recomendado")
+    
+    st.plotly_chart(fig, use_container_width=True)
 
+def chat_interface():
+    st.header("💬 Chat Multi-canal Calculator")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("📝 Parámetros Chat")
+        forecast = st.number_input("Chats por hora", min_value=1.0, value=200.0, step=1.0)
+        
+        st.subheader("⏱️ AHT por Número de Chats Simultáneos")
+        max_chats = st.selectbox("Máximo chats simultáneos por agente", [1, 2, 3, 4, 5], index=2)
+        
+        aht_list = []
+        for i in range(max_chats):
+            aht = st.number_input(f"AHT para {i+1} chat(s) (min)", min_value=0.1, value=2.0 + i*0.5, step=0.1, key=f"aht_{i}")
+            aht_list.append(aht)
+        
+        agents = st.number_input("Agentes Chat", min_value=1.0, value=15.0, step=1.0)
+        awt = st.number_input("AWT Chat (segundos)", min_value=1.0, value=30.0, step=1.0)
+        lines = st.number_input("Líneas Chat", min_value=int(agents), value=300, step=1)
+        patience = st.number_input("Patience Chat (segundos)", min_value=1.0, value=180.0, step=1.0)
+    
+    with col2:
+        st.subheader("📊 Resultados Chat")
+        
+        # Calcular métricas chat
+        chat_sl = CHAT.sla(forecast, aht_list, agents, awt, lines, patience)
+        chat_asa = CHAT.asa(forecast, aht_list, agents, lines, patience)
+        
+        # Métricas específicas del chat
+        parallel_capacity = len(aht_list)
+        avg_aht = sum(aht_list) / len(aht_list)
+        effectiveness = 0.7 + (0.3 / parallel_capacity)
+        chats_per_agent_hour = forecast / agents
+        
+        st.markdown(f"""
+        <div class="metric-card success-metric">
+            <h3>Service Level Chat</h3>
+            <h2>{chat_sl:.1%}</h2>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.markdown(f"""
+        <div class="metric-card">
+            <h3>ASA Chat</h3>
+            <h2>{chat_asa:.2f} min</h2>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.markdown(f"""
+        <div class="metric-card">
+            <h3>Chats Simultáneos Máx</h3>
+            <h2>{parallel_capacity}</h2>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.markdown(f"""
+        <div class="metric-card">
+            <h3>Eficiencia</h3>
+            <h2>{chats_per_agent_hour:.1f} chats/agente/hora</h2>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # Comparación de configuraciones
+    st.subheader("⚖️ Comparación de Configuraciones")
+    
+    configs = []
+    for max_simultaneous in range(1, 6):
+        test_aht = [2.0 + i*0.4 for i in range(max_simultaneous)]
+        test_agents = CHAT.agents_for_sla(0.85, forecast, test_aht, awt, lines, patience)
+        test_sl = CHAT.sla(forecast, test_aht, test_agents, awt, lines, patience)
+        efficiency = forecast / test_agents
+        
+        configs.append({
+            'Chats Simultáneos': max_simultaneous,
+            'Agentes Necesarios': test_agents,
+            'Service Level': f"{test_sl:.1%}",
+            'Eficiencia': f"{efficiency:.1f} chats/agente/hora",
+            'AHT Promedio': f"{sum(test_aht)/len(test_aht):.1f} min"
+        })
+    
+    df_configs = pd.DataFrame(configs)
+    st.dataframe(df_configs, use_container_width=True)
+    
+    # Gráfico de eficiencia
+    fig = px.bar(df_configs, x='Chats Simultáneos', y='Agentes Necesarios', 
+                 title="Agentes Necesarios vs Chats Simultáneos",
+                 color='Agentes Necesarios', color_continuous_scale='Blues')
+    st.plotly_chart(fig, use_container_width=True)
+
+def blending_interface():
+    st.header("🔄 Blending Calculator")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("📝 Parámetros Blending")
+        inbound_forecast = st.number_input("Forecast Inbound (llamadas/hora)", min_value=1.0, value=120.0, step=1.0)
+        inbound_aht = st.number_input("AHT Inbound (minutos)", min_value=0.1, value=3.5, step=0.1)
+        outbound_aht = st.number_input("AHT Outbound (minutos)", min_value=0.1, value=5.0, step=0.1)
+        total_agents = st.number_input("Total Agentes", min_value=1.0, value=30.0, step=1.0)
+        awt = st.number_input("AWT (segundos)", min_value=1.0, value=20.0, step=1.0)
+        threshold = st.number_input("Threshold (agentes reservados)", min_value=0.0, value=3.0, step=1.0, max_value=total_agents)
+        
+        lines = st.number_input("Líneas", min_value=int(total_agents), value=int(total_agents*1.2), step=1)
+        patience = st.number_input("Patience (segundos)", min_value=1.0, value=300.0, step=1.0)
+    
+    with col2:
+        st.subheader("📊 Resultados Blending")
+        
+        # Calcular métricas blending
+        bl_sl = BL.sla(inbound_forecast, inbound_aht, total_agents, awt, lines, patience, threshold)
+        outbound_capacity = BL.outbound_capacity(inbound_forecast, inbound_aht, total_agents, lines, patience, threshold, outbound_aht)
+        
+        available_for_inbound = total_agents - threshold
+        inbound_occupancy = occupancy_erlang_c(inbound_forecast, inbound_aht, available_for_inbound)
+        
+        st.markdown(f"""
+        <div class="metric-card success-metric">
+            <h3>Service Level Inbound</h3>
+            <h2>{bl_sl:.1%}</h2>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.markdown(f"""
+        <div class="metric-card">
+            <h3>Capacidad Outbound</h3>
+            <h2>{outbound_capacity:.1f} llamadas/hora</h2>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.markdown(f"""
+        <div class="metric-card">
+            <h3>Agentes Disponibles Inbound</h3>
+            <h2>{available_for_inbound:.0f}</h2>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.markdown(f"""
+        <div class="metric-card">
+            <h3>Ocupación Inbound</h3>
+            <h2>{inbound_occupancy:.1%}</h2>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # Optimización de threshold
+    st.subheader("🎯 Optimización de Threshold")
+    
+    target_sl_blend = st.slider("Service Level Objetivo Blending", 0.7, 0.95, 0.8, 0.01)
+    optimal_threshold = BL.optimal_threshold(inbound_forecast, inbound_aht, total_agents, awt, lines, patience, target_sl_blend)
+    
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Threshold Óptimo", f"{optimal_threshold}")
+    col2.metric("Threshold Actual", f"{threshold}")
+    col3.metric("Diferencia", f"{optimal_threshold - threshold:+}")
+    
+    # Análisis de threshold
+    st.subheader("📈 Análisis de Threshold")
+    
+    threshold_range = range(0, int(total_agents * 0.4))
+    sl_blend_data = []
+    outbound_data = []
+    
+    for t in threshold_range:
+        sl_val = BL.sla(inbound_forecast, inbound_aht, total_agents, awt, lines, patience, t)
+        out_val = BL.outbound_capacity(inbound_forecast, inbound_aht, total_agents, lines, patience, t, outbound_aht)
+        
+        sl_blend_data.append(sl_val)
+        outbound_data.append(out_val)
+    
+    fig = go.Figure()
+    
+    fig.add_trace(go.Scatter(
+        x=list(threshold_range),
+        y=sl_blend_data,
+        mode='lines+markers',
+        name='Service Level Inbound',
+        yaxis='y',
+        line=dict(color='blue')
+    ))
+    
+    fig.add_trace(go.Scatter(
+        x=list(threshold_range),
+        y=outbound_data,
+        mode='lines+markers',
+        name='Capacidad Outbound',
+        yaxis='y2',
+        line=dict(color='green')
+    ))
+    
+    fig.update_layout(
+        title="Service Level vs
