@@ -407,7 +407,8 @@ def erlang_x_interface():
     with col1:
         st.subheader("📝 Parámetros de Entrada")
         forecast = st.number_input("Forecast (llamadas/hora)", min_value=1.0, value=100.0, step=1.0)
-        aht = st.number_input("AHT (minutos)", min_value=0.1, value=4.0, step=0.1)
+        aht = st.number_input("AHT (segundos)", min_value=1.0, value=240.0, step=1.0)
+        interval_seconds = st.number_input("Duración del intervalo (segundos)", min_value=1.0, value=3600.0, step=1.0)
         agents = st.number_input("Agentes", min_value=1.0, value=25.0, step=1.0)
         awt = st.number_input("AWT (segundos)", min_value=1.0, value=20.0, step=1.0)
         
@@ -426,13 +427,14 @@ def erlang_x_interface():
         st.subheader("📊 Resultados")
         
         # Calcular métricas
-        sl = X.SLA.calculate(forecast, aht, agents, awt, lines, patience)
-        asa = X.asa(forecast, aht, agents)
-        occ = X.occupancy(forecast, aht, agents)
+        arrival_rate = forecast / interval_seconds
+        sl = X.SLA.calculate(arrival_rate, aht, agents, awt, lines, patience)
+        asa = X.asa(arrival_rate, aht, agents)
+        occ = X.occupancy(arrival_rate, aht, agents)
         
         # Mostrar métricas
         sl_class = "success-metric" if sl >= 0.8 else "warning-metric" if sl >= 0.7 else "danger-metric"
-        asa_class = "success-metric" if asa <= 0.5 else "warning-metric" if asa <= 1.0 else "danger-metric"
+        asa_class = "success-metric" if asa <= 30 else "warning-metric" if asa <= 60 else "danger-metric"
         occ_class = "success-metric" if 0.7 <= occ <= 0.85 else "warning-metric"
         
         st.markdown(f"""
@@ -445,7 +447,7 @@ def erlang_x_interface():
         st.markdown(f"""
         <div class="metric-card {asa_class}">
             <h3>ASA (Average Speed of Answer)</h3>
-            <h2>{asa:.2f} min</h2>
+            <h2>{asa:.2f} seg</h2>
         </div>
         """, unsafe_allow_html=True)
         
@@ -457,7 +459,7 @@ def erlang_x_interface():
         """, unsafe_allow_html=True)
         
         if use_advanced and lines and patience:
-            abandon_rate = X.abandonment(forecast, aht, agents, lines, patience)
+            abandon_rate = X.abandonment(arrival_rate, aht, agents, lines, patience)
             abandon_class = "success-metric" if abandon_rate <= 0.05 else "warning-metric" if abandon_rate <= 0.1 else "danger-metric"
             
             st.markdown(f"""
@@ -471,7 +473,7 @@ def erlang_x_interface():
     st.subheader("🎯 Análisis de Dimensionamiento")
     
     target_sl = st.slider("Service Level Objetivo", 0.7, 0.95, 0.8, 0.01)
-    recommended_agents = X.AGENTS.for_sla(target_sl, forecast, aht, awt, lines, patience)
+    recommended_agents = X.AGENTS.for_sla(target_sl, arrival_rate, aht, awt, lines, patience)
     
     col1, col2, col3 = st.columns(3)
     col1.metric("Agentes Recomendados", f"{recommended_agents}")
@@ -487,9 +489,9 @@ def erlang_x_interface():
     occ_data = []
     
     for a in agent_range:
-        sl_val = X.SLA.calculate(forecast, aht, a, awt, lines, patience)
-        asa_val = X.asa(forecast, aht, a)
-        occ_val = X.occupancy(forecast, aht, a)
+        sl_val = X.SLA.calculate(arrival_rate, aht, a, awt, lines, patience)
+        asa_val = X.asa(arrival_rate, aht, a)
+        occ_val = X.occupancy(arrival_rate, aht, a)
         
         sl_data.append(sl_val)
         asa_data.append(asa_val)
@@ -511,7 +513,7 @@ def erlang_x_interface():
         x=list(agent_range),
         y=asa_data,
         mode='lines+markers',
-        name='ASA (min)',
+        name='ASA (seg)',
         yaxis='y2',
         line=dict(color='red')
     ))
@@ -520,7 +522,7 @@ def erlang_x_interface():
         title="Service Level y ASA vs Número de Agentes",
         xaxis_title="Número de Agentes",
         yaxis=dict(title="Service Level", side="left", range=[0, 1]),
-        yaxis2=dict(title="ASA (minutos)", side="right", overlaying="y"),
+        yaxis2=dict(title="ASA (segundos)", side="right", overlaying="y"),
         hovermode='x unified'
     )
 
@@ -688,7 +690,8 @@ def comparative_analysis():
     
     with col1:
         forecast_comp = st.number_input("Forecast común", min_value=1.0, value=150.0, step=1.0)
-        aht_comp = st.number_input("AHT común (min)", min_value=0.1, value=4.0, step=0.1)
+        interval_seconds_comp = st.number_input("Duración del intervalo (segundos)", min_value=1.0, value=3600.0, step=1.0)
+        aht_comp = st.number_input("AHT común (seg)", min_value=1.0, value=240.0, step=1.0)
     
     with col2:
         agents_comp = st.number_input("Agentes común", min_value=1.0, value=30.0, step=1.0)
@@ -704,29 +707,30 @@ def comparative_analysis():
     st.subheader("📊 Comparación de Resultados")
     
     # Erlang C básico
-    sl_basic = X.SLA.calculate(forecast_comp, aht_comp, agents_comp, awt_comp)
-    asa_basic = X.asa(forecast_comp, aht_comp, agents_comp)
-    occ_basic = X.occupancy(forecast_comp, aht_comp, agents_comp)
+    arrival_rate_comp = forecast_comp / interval_seconds_comp
+    sl_basic = X.SLA.calculate(arrival_rate_comp, aht_comp, agents_comp, awt_comp)
+    asa_basic = X.asa(arrival_rate_comp, aht_comp, agents_comp)
+    occ_basic = X.occupancy(arrival_rate_comp, aht_comp, agents_comp)
     
     # Erlang X con abandonment
-    sl_abandon = X.SLA.calculate(forecast_comp, aht_comp, agents_comp, awt_comp, lines_comp, patience_comp)
-    abandon_rate = X.abandonment(forecast_comp, aht_comp, agents_comp, lines_comp, patience_comp)
+    sl_abandon = X.SLA.calculate(arrival_rate_comp, aht_comp, agents_comp, awt_comp, lines_comp, patience_comp)
+    abandon_rate = X.abandonment(arrival_rate_comp, aht_comp, agents_comp, lines_comp, patience_comp)
     
     # Chat modelo
     chat_aht_comp = [aht_comp * 0.7, aht_comp * 0.8, aht_comp * 0.9]
-    sl_chat = CHAT.sla(forecast_comp, chat_aht_comp, agents_comp, awt_comp, lines_comp, patience_comp)
-    asa_chat = CHAT.asa(forecast_comp, chat_aht_comp, agents_comp, lines_comp, patience_comp)
+    sl_chat = CHAT.sla(arrival_rate_comp, chat_aht_comp, agents_comp, awt_comp, lines_comp, patience_comp)
+    asa_chat = CHAT.asa(arrival_rate_comp, chat_aht_comp, agents_comp, lines_comp, patience_comp)
     
     # Blending modelo
     threshold_comp = 3
-    sl_blend = BL.sla(forecast_comp, aht_comp, agents_comp, awt_comp, lines_comp, patience_comp, threshold_comp)
-    outbound_cap = BL.outbound_capacity(forecast_comp, aht_comp, agents_comp, lines_comp, patience_comp, threshold_comp, aht_comp)
+    sl_blend = BL.sla(arrival_rate_comp, aht_comp, agents_comp, awt_comp, lines_comp, patience_comp, threshold_comp)
+    outbound_cap = BL.outbound_capacity(arrival_rate_comp, aht_comp, agents_comp, lines_comp, patience_comp, threshold_comp, aht_comp)
     
     # Crear tabla comparativa
     comparison_data = {
         'Modelo': ['Erlang C', 'Erlang X', 'Chat Multi-canal', 'Blending'],
         'Service Level': [f"{sl_basic:.1%}", f"{sl_abandon:.1%}", f"{sl_chat:.1%}", f"{sl_blend:.1%}"],
-        'ASA (min)': [f"{asa_basic:.2f}", f"{asa_basic:.2f}", f"{asa_chat:.2f}", f"{asa_basic:.2f}"],
+        'ASA (seg)': [f"{asa_basic:.2f}", f"{asa_basic:.2f}", f"{asa_chat:.2f}", f"{asa_basic:.2f}"],
         'Ocupación': [f"{occ_basic:.1%}", f"{occ_basic:.1%}", f"{occ_basic:.1%}", f"{occ_basic:.1%}"],
         'Características': [
             'Modelo básico, sin abandonment',
@@ -792,7 +796,8 @@ def staffing_optimizer():
     with col1:
         start_hour = st.selectbox("Hora inicio", range(0, 24), index=8)
         end_hour = st.selectbox("Hora fin", range(start_hour + 1, 25), index=20)
-        aht_staff = st.number_input("AHT (minutos)", min_value=0.1, value=4.0, step=0.1, key="aht_staff")
+        aht_staff = st.number_input("AHT (segundos)", min_value=1.0, value=240.0, step=1.0, key="aht_staff")
+        interval_seconds_staff = st.number_input("Duración del intervalo (segundos)", min_value=1.0, value=3600.0, step=1.0, key="int_staff")
         target_sl_staff = st.slider("Service Level objetivo", 0.7, 0.95, 0.8, 0.01, key="sl_staff")
     
     with col2:
@@ -844,16 +849,17 @@ def staffing_optimizer():
     total_agent_hours = 0
     
     for hour, forecast in zip(hours, forecasts):
-        agents_needed = X.AGENTS.for_sla(target_sl_staff, forecast, aht_staff, 20)
-        sl_achieved = X.SLA.calculate(forecast, aht_staff, agents_needed, 20)
-        asa_achieved = X.asa(forecast, aht_staff, agents_needed)
+        arrival_rate_staff = forecast / interval_seconds_staff
+        agents_needed = X.AGENTS.for_sla(target_sl_staff, arrival_rate_staff, aht_staff, 20)
+        sl_achieved = X.SLA.calculate(arrival_rate_staff, aht_staff, agents_needed, 20)
+        asa_achieved = X.asa(arrival_rate_staff, aht_staff, agents_needed)
         
         staffing_results.append({
             'Hora': f"{hour:02d}:00",
             'Forecast': f"{forecast:.0f}",
             'Agentes': agents_needed,
             'SL': f"{sl_achieved:.1%}",
-            'ASA': f"{asa_achieved:.1f} min"
+            'ASA': f"{asa_achieved:.1f} seg"
         })
         
         total_agent_hours += agents_needed
@@ -922,7 +928,8 @@ def staffing_optimizer():
             
             if shift_forecasts:
                 max_forecast = max(shift_forecasts)
-                agents_for_shift = X.AGENTS.for_sla(target_sl_staff, max_forecast, aht_staff, 20)
+                arrival_rate_shift = max_forecast / interval_seconds_staff
+                agents_for_shift = X.AGENTS.for_sla(target_sl_staff, arrival_rate_shift, aht_staff, 20)
                 
                 shift_starts.append({
                     'Turno': f"{start:02d}:00 - {shift_end:02d}:00",
@@ -993,13 +1000,14 @@ def chat_interface():
     with col1:
         st.subheader("📝 Parámetros Chat")
         forecast = st.number_input("Chats por hora", min_value=1.0, value=200.0, step=1.0)
+        interval_seconds_chat = st.number_input("Duración del intervalo (segundos)", min_value=1.0, value=3600.0, step=1.0)
         
         st.subheader("⏱️ AHT por Número de Chats Simultáneos")
         max_chats = st.selectbox("Máximo chats simultáneos por agente", [1, 2, 3, 4, 5], index=2)
         
         aht_list = []
         for i in range(max_chats):
-            aht = st.number_input(f"AHT para {i+1} chat(s) (min)", min_value=0.1, value=2.0 + i*0.5, step=0.1, key=f"aht_{i}")
+            aht = st.number_input(f"AHT para {i+1} chat(s) (seg)", min_value=1.0, value=120.0 + i*30.0, step=1.0, key=f"aht_{i}")
             aht_list.append(aht)
         
         agents = st.number_input("Agentes Chat", min_value=1.0, value=15.0, step=1.0)
@@ -1011,8 +1019,9 @@ def chat_interface():
         st.subheader("📊 Resultados Chat")
         
         # Calcular métricas chat
-        chat_sl = CHAT.sla(forecast, aht_list, agents, awt, lines, patience)
-        chat_asa = CHAT.asa(forecast, aht_list, agents, lines, patience)
+        arrival_rate_chat = forecast / interval_seconds_chat
+        chat_sl = CHAT.sla(arrival_rate_chat, aht_list, agents, awt, lines, patience)
+        chat_asa = CHAT.asa(arrival_rate_chat, aht_list, agents, lines, patience)
         
         # Métricas específicas del chat
         parallel_capacity = len(aht_list)
@@ -1030,7 +1039,7 @@ def chat_interface():
         st.markdown(f"""
         <div class="metric-card">
             <h3>ASA Chat</h3>
-            <h2>{chat_asa:.2f} min</h2>
+            <h2>{chat_asa:.2f} seg</h2>
         </div>
         """, unsafe_allow_html=True)
         
@@ -1053,9 +1062,9 @@ def chat_interface():
     
     configs = []
     for max_simultaneous in range(1, 6):
-        test_aht = [2.0 + i*0.4 for i in range(max_simultaneous)]
-        test_agents = CHAT.agents_for_sla(0.85, forecast, test_aht, awt, lines, patience)
-        test_sl = CHAT.sla(forecast, test_aht, test_agents, awt, lines, patience)
+        test_aht = [120.0 + i*24.0 for i in range(max_simultaneous)]
+        test_agents = CHAT.agents_for_sla(0.85, arrival_rate_chat, test_aht, awt, lines, patience)
+        test_sl = CHAT.sla(arrival_rate_chat, test_aht, test_agents, awt, lines, patience)
         efficiency = forecast / test_agents
         
         configs.append({
@@ -1063,7 +1072,7 @@ def chat_interface():
             'Agentes Necesarios': test_agents,
             'Service Level': f"{test_sl:.1%}",
             'Eficiencia': f"{efficiency:.1f} chats/agente/hora",
-            'AHT Promedio': f"{sum(test_aht)/len(test_aht):.1f} min"
+            'AHT Promedio': f"{sum(test_aht)/len(test_aht):.1f} seg"
         })
     
     df_configs = pd.DataFrame(configs)
@@ -1083,8 +1092,9 @@ def blending_interface():
     with col1:
         st.subheader("📝 Parámetros Blending")
         inbound_forecast = st.number_input("Forecast Inbound (llamadas/hora)", min_value=1.0, value=120.0, step=1.0)
-        inbound_aht = st.number_input("AHT Inbound (minutos)", min_value=0.1, value=3.5, step=0.1)
-        outbound_aht = st.number_input("AHT Outbound (minutos)", min_value=0.1, value=5.0, step=0.1)
+        interval_seconds_blend = st.number_input("Duración del intervalo (segundos)", min_value=1.0, value=3600.0, step=1.0)
+        inbound_aht = st.number_input("AHT Inbound (segundos)", min_value=1.0, value=210.0, step=1.0)
+        outbound_aht = st.number_input("AHT Outbound (segundos)", min_value=1.0, value=300.0, step=1.0)
         total_agents = st.number_input("Total Agentes", min_value=1.0, value=30.0, step=1.0)
         awt = st.number_input("AWT (segundos)", min_value=1.0, value=20.0, step=1.0)
         threshold = st.number_input("Threshold (agentes reservados)", min_value=0.0, value=3.0, step=1.0, max_value=total_agents)
@@ -1096,11 +1106,12 @@ def blending_interface():
         st.subheader("📊 Resultados Blending")
         
         # Calcular métricas blending
-        bl_sl = BL.sla(inbound_forecast, inbound_aht, total_agents, awt, lines, patience, threshold)
-        outbound_capacity = BL.outbound_capacity(inbound_forecast, inbound_aht, total_agents, lines, patience, threshold, outbound_aht)
-        
+        arrival_rate_blend = inbound_forecast / interval_seconds_blend
+        bl_sl = BL.sla(arrival_rate_blend, inbound_aht, total_agents, awt, lines, patience, threshold)
+        outbound_capacity = BL.outbound_capacity(arrival_rate_blend, inbound_aht, total_agents, lines, patience, threshold, outbound_aht)
+
         available_for_inbound = total_agents - threshold
-        inbound_occupancy = occupancy_erlang_c(inbound_forecast, inbound_aht, available_for_inbound)
+        inbound_occupancy = occupancy_erlang_c(arrival_rate_blend, inbound_aht, available_for_inbound)
         
         st.markdown(f"""
         <div class="metric-card success-metric">
@@ -1134,7 +1145,7 @@ def blending_interface():
     st.subheader("🎯 Optimización de Threshold")
     
     target_sl_blend = st.slider("Service Level Objetivo Blending", 0.7, 0.95, 0.8, 0.01)
-    optimal_threshold = BL.optimal_threshold(inbound_forecast, inbound_aht, total_agents, awt, lines, patience, target_sl_blend)
+    optimal_threshold = BL.optimal_threshold(arrival_rate_blend, inbound_aht, total_agents, awt, lines, patience, target_sl_blend)
     
     col1, col2, col3 = st.columns(3)
     col1.metric("Threshold Óptimo", f"{optimal_threshold}")
@@ -1149,8 +1160,8 @@ def blending_interface():
     outbound_data = []
     
     for t in threshold_range:
-        sl_val = BL.sla(inbound_forecast, inbound_aht, total_agents, awt, lines, patience, t)
-        out_val = BL.outbound_capacity(inbound_forecast, inbound_aht, total_agents, lines, patience, t, outbound_aht)
+        sl_val = BL.sla(arrival_rate_blend, inbound_aht, total_agents, awt, lines, patience, t)
+        out_val = BL.outbound_capacity(arrival_rate_blend, inbound_aht, total_agents, lines, patience, t, outbound_aht)
         
         sl_blend_data.append(sl_val)
         outbound_data.append(out_val)
