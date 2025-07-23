@@ -38,3 +38,13 @@ See `erlang_examples.py` for scripted workflows demonstrating these parameters.
 - Ensure you are using a recent version of Python with `pip` available.
 - If package installation fails, verify your network connection or use a local PyPI mirror.
 - Delete the `examples` directory if you need a clean regeneration of the sample scripts and rerun `python install.py`.
+
+## Running Tests
+
+The repository includes a `tests/` directory with pytest-based unit tests. After installing the requirements you can run them with:
+
+```bash
+pytest
+```
+
+This will execute tests for the Erlang calculations and confirm that the Streamlit interface is importable.
