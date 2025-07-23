@@ -1,18 +1,163 @@
 # coding: utf-8
 
-"""Erlang calculator with Streamlit UI."""
+"""Erlang calculator with Streamlit UI.
+
+This module exposes a minimal set of Erlang based formulas that can be used in
+scripts or through the included Streamlit application.  Additional convenience
+classes are provided for common call centre KPIs such as service level or
+occupancy.
+
+Examples
+--------
+>>> from erlang_calculator import SLA, ASA, BLOCKING
+>>> SLA.probability(traffic=6, agents=8, aht=180, target=20)
+0.82  # approximate service level
+
+>>> ASA.wait_time(traffic=6, agents=8, aht=180)
+23.4  # average speed of answer in seconds
+
+The :func:`run_app` function starts a Streamlit interface for interactive use.
+"""
 
 import numpy as np
 import pandas as pd
 from scipy.special import factorial
 from scipy.optimize import minimize
 
+
+class BLOCKING:
+    """Blocking related calculations."""
+
+    @staticmethod
+    def probability(traffic: float, trunks: int) -> float:
+        """Return Erlang B blocking probability.
+
+        Parameters
+        ----------
+        traffic : float
+            Offered traffic intensity in erlangs.
+        trunks : int
+            Number of available trunks/lines.
+
+        Examples
+        --------
+        >>> BLOCKING.probability(traffic=4, trunks=5)
+        0.10
+        """
+
+        traffic = float(traffic)
+        trunks = int(trunks)
+        if trunks <= 0:
+            raise ValueError("trunks must be positive")
+        inv_b = np.sum([(traffic ** k) / factorial(k) for k in range(trunks + 1)])
+        b = ((traffic ** trunks) / factorial(trunks)) / inv_b
+        return float(b)
+
+
+class OCCUPANCY:
+    """Agent occupancy calculations.
+
+    Examples
+    --------
+    >>> OCCUPANCY.rate(traffic=5, agents=8)
+    0.625
+    """
+
+    @staticmethod
+    def rate(traffic: float, agents: int) -> float:
+        """Return occupancy ratio given offered traffic and agents."""
+
+        traffic = float(traffic)
+        agents = int(agents)
+        if agents <= 0:
+            raise ValueError("agents must be positive")
+        occ = traffic / agents
+        return min(max(occ, 0.0), 1.0)
+
+
+class SLA:
+    """Service level calculations.
+
+    Examples
+    --------
+    >>> SLA.probability(traffic=6, agents=8, aht=180, target=20)
+    0.82
+    """
+
+    @staticmethod
+    def probability(traffic: float, agents: int, aht: float, target: float) -> float:
+        """Return service level probability."""
+
+        if agents <= 0:
+            raise ValueError("agents must be positive")
+        if aht <= 0 or target < 0:
+            raise ValueError("aht and target must be positive")
+        c = X.erlang_c(traffic, agents)
+        return 1 - c * np.exp(-(agents - traffic) * target / aht)
+
+
+class ASA:
+    """Average speed of answer related utilities.
+
+    Examples
+    --------
+    >>> ASA.wait_time(traffic=6, agents=8, aht=180)
+    23.4
+    """
+
+    @staticmethod
+    def wait_time(traffic: float, agents: int, aht: float) -> float:
+        """Return expected waiting time in seconds."""
+
+        if agents <= 0:
+            raise ValueError("agents must be positive")
+        if aht <= 0:
+            raise ValueError("aht must be positive")
+        c = X.erlang_c(traffic, agents)
+        if agents <= traffic:
+            return float('inf')
+        return (c / (agents - traffic)) * aht
+
+
+class ABANDON:
+    """Call abandonment calculations.
+
+    Examples
+    --------
+    >>> ABANDON.probability(traffic=6, agents=8, aht=180, patience=30)
+    0.45
+    """
+
+    @staticmethod
+    def probability(
+        traffic: float,
+        agents: int,
+        aht: float,
+        patience: float = 30.0,
+    ) -> float:
+        """Estimate abandonment probability assuming exponential patience."""
+
+        if patience <= 0:
+            raise ValueError("patience must be positive")
+        wait = ASA.wait_time(traffic, agents, aht)
+        if np.isinf(wait):
+            return 1.0
+        return 1 - np.exp(-wait / patience)
+
 class X:
     """Collection of Erlang formulas."""
 
     @staticmethod
     def erlang_b(traffic, trunks):
-        """Compute Erlang B blocking probability."""
+        """Compute Erlang B blocking probability.
+
+        Parameters
+        ----------
+        traffic : float
+            Offered traffic in erlangs.
+        trunks : int
+            Number of available trunks.
+        """
         traffic = float(traffic)
         trunks = int(trunks)
         inv_b = np.sum([(traffic ** k) / factorial(k) for k in range(trunks + 1)])
@@ -21,7 +166,15 @@ class X:
 
     @staticmethod
     def erlang_c(traffic, agents):
-        """Compute Erlang C waiting probability."""
+        """Compute Erlang C waiting probability.
+
+        Parameters
+        ----------
+        traffic : float
+            Offered traffic in erlangs.
+        agents : int
+            Number of available agents.
+        """
         traffic = float(traffic)
         agents = int(agents)
         rho = traffic / agents
@@ -31,24 +184,83 @@ class X:
         denom = np.sum([(traffic ** k) / factorial(k) for k in range(agents)]) + numerator
         return numerator / denom
 
+    class AGENTS:
+        """Staffing utilities for Erlang B/C models."""
+
+        @staticmethod
+        def required_for_blocking(traffic: float, target_blocking: float) -> int:
+            """Minimum trunks so blocking <= ``target_blocking``."""
+
+            if traffic < 0:
+                raise ValueError("traffic must be non-negative")
+            if target_blocking <= 0:
+                return int(np.ceil(traffic))
+
+            if target_blocking >= 1:
+                raise ValueError("target_blocking must be < 1")
+
+            trunks = max(int(np.ceil(traffic)), 1)
+            while BLOCKING.probability(traffic, trunks) > target_blocking:
+                trunks += 1
+            return trunks
+
 class CHAT:
     """Call center metrics."""
 
     @staticmethod
     def service_level(traffic, agents, aht, target):
+        """Return probability a call is answered within ``target`` seconds.
+
+        Parameters
+        ----------
+        traffic : float
+            Offered traffic in erlangs.
+        agents : int
+            Number of available agents.
+        aht : float
+            Average handle time (seconds).
+        target : float
+            Service level threshold in seconds.
+        """
+
         c = X.erlang_c(traffic, agents)
         return 1 - c * np.exp(-(agents - traffic) * target / aht)
 
     @staticmethod
     def asa(traffic, agents, aht):
+        """Return the average waiting time before answer in seconds."""
+
         c = X.erlang_c(traffic, agents)
         if agents <= traffic:
             return np.inf
         return (c / (agents - traffic)) * aht
 
+    class AGENTS:
+        """Agent requirement utilities for call centre KPIs."""
+
+        @staticmethod
+        def for_service_level(
+            traffic: float, aht: float, target_service: float, target_time: float = 20
+        ) -> int:
+            """Wrapper around :func:`required_agents`."""
+
+            return CHAT.required_agents(traffic, aht, target_service, target_time)
+
     @staticmethod
     def required_agents(traffic, aht, target_service, target_time=20):
-        """Find minimum agents to hit target service level."""
+        """Find minimum agents to hit target service level.
+
+        Parameters
+        ----------
+        traffic : float
+            Offered traffic in erlangs.
+        aht : float
+            Average handle time (seconds).
+        target_service : float
+            Desired service level (0-1).
+        target_time : float, optional
+            Threshold time in seconds, by default ``20``.
+        """
         def objective(n):
             return abs(CHAT.service_level(traffic, int(n[0]), aht, target_time) - target_service)
 
@@ -71,6 +283,17 @@ class BL:
         samples = np.random.poisson(mean_traffic, size=iters)
         results = [CHAT.service_level(s, agents, aht, target) for s in samples]
         return pd.Series(results)
+
+    class AGENTS:
+        """Utility functions for staffing based on occupancy."""
+
+        @staticmethod
+        def for_occupancy(traffic: float, max_occupancy: float) -> int:
+            """Return agents required so occupancy <= ``max_occupancy``."""
+
+            if not 0 < max_occupancy <= 1:
+                raise ValueError("max_occupancy must be in (0, 1]")
+            return int(np.ceil(traffic / max_occupancy))
 
 
 
