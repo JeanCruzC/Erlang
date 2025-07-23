@@ -67,6 +67,7 @@ def factorial_approx(n):
 @st.cache_data
 def erlang_b(traffic, agents):
     """Fórmula de Erlang B (blocking probability)"""
+    agents = int(agents)
     if agents == 0:
         return 1.0
     if traffic == 0:
@@ -80,6 +81,7 @@ def erlang_b(traffic, agents):
 @st.cache_data
 def erlang_c(traffic, agents):
     """Fórmula de Erlang C (waiting probability)"""
+    agents = int(agents)
     if agents <= traffic:
         return 1.0
     
@@ -95,6 +97,7 @@ def erlang_c(traffic, agents):
 def service_level_erlang_c(forecast, aht, agents, awt):
     """Calcula el nivel de servicio usando Erlang C"""
     traffic = forecast * aht
+    agents = int(agents)
     
     if agents <= traffic:
         return 0.0
@@ -111,7 +114,8 @@ def service_level_erlang_c(forecast, aht, agents, awt):
 def waiting_time_erlang_c(forecast, aht, agents):
     """Calcula el tiempo promedio de espera (ASA)"""
     traffic = forecast * aht
-    
+    agents = int(agents)
+
     if agents <= traffic:
         return float('inf')
     
@@ -122,12 +126,14 @@ def waiting_time_erlang_c(forecast, aht, agents):
 def occupancy_erlang_c(forecast, aht, agents):
     """Calcula la ocupación de los agentes"""
     traffic = forecast * aht
+    agents = int(agents)
     return min(traffic / agents, 1.0)
 
 @st.cache_data
 def erlang_x_abandonment(forecast, aht, agents, lines, patience):
     """Calcula la probabilidad de abandono en modelo Erlang X"""
     traffic = forecast * aht
+    agents = int(agents)
     
     if patience == 0:
         return erlang_b(traffic, lines)
@@ -409,7 +415,7 @@ def erlang_x_interface():
         forecast = st.number_input("Forecast (llamadas/hora)", min_value=1.0, value=100.0, step=1.0)
         aht = st.number_input("AHT (segundos)", min_value=1.0, value=240.0, step=1.0)
         interval_seconds = st.number_input("Duración del intervalo (segundos)", min_value=1.0, value=3600.0, step=1.0)
-        agents = st.number_input("Agentes", min_value=1.0, value=25.0, step=1.0)
+        agents = int(st.number_input("Agentes", min_value=1, value=25, step=1))
         awt = st.number_input("AWT (segundos)", min_value=1.0, value=20.0, step=1.0)
         
         # Parámetros opcionales
@@ -694,7 +700,7 @@ def comparative_analysis():
         aht_comp = st.number_input("AHT común (seg)", min_value=1.0, value=240.0, step=1.0)
     
     with col2:
-        agents_comp = st.number_input("Agentes común", min_value=1.0, value=30.0, step=1.0)
+        agents_comp = int(st.number_input("Agentes común", min_value=1, value=30, step=1))
         awt_comp = st.number_input("AWT común (seg)", min_value=1.0, value=20.0, step=1.0)
     
     with col3:
@@ -1010,7 +1016,7 @@ def chat_interface():
             aht = st.number_input(f"AHT para {i+1} chat(s) (seg)", min_value=1.0, value=120.0 + i*30.0, step=1.0, key=f"aht_{i}")
             aht_list.append(aht)
         
-        agents = st.number_input("Agentes Chat", min_value=1.0, value=15.0, step=1.0)
+        agents = int(st.number_input("Agentes Chat", min_value=1, value=15, step=1))
         awt = st.number_input("AWT Chat (segundos)", min_value=1.0, value=30.0, step=1.0)
         lines = st.number_input("Líneas Chat", min_value=int(agents), value=300, step=1)
         patience = st.number_input("Patience Chat (segundos)", min_value=1.0, value=180.0, step=1.0)
@@ -1095,7 +1101,7 @@ def blending_interface():
         interval_seconds_blend = st.number_input("Duración del intervalo (segundos)", min_value=1.0, value=3600.0, step=1.0)
         inbound_aht = st.number_input("AHT Inbound (segundos)", min_value=1.0, value=210.0, step=1.0)
         outbound_aht = st.number_input("AHT Outbound (segundos)", min_value=1.0, value=300.0, step=1.0)
-        total_agents = st.number_input("Total Agentes", min_value=1.0, value=30.0, step=1.0)
+        total_agents = int(st.number_input("Total Agentes", min_value=1, value=30, step=1))
         awt = st.number_input("AWT (segundos)", min_value=1.0, value=20.0, step=1.0)
         threshold = st.number_input("Threshold (agentes reservados)", min_value=0.0, value=3.0, step=1.0, max_value=total_agents)
         
