@@ -231,6 +231,7 @@ class X:
             traffic = forecast * aht
             
             def objective(agents):
+                agents = int(round(agents))
                 if agents <= 0:
                     return float('inf')
                 sl = X.SLA.calculate(forecast, aht, agents, awt, lines, patience)
@@ -264,6 +265,14 @@ class X:
     def abandonment(forecast, aht, agents, lines, patience):
         return erlang_x_abandonment(forecast, aht, agents, lines, patience)
 
+    @staticmethod
+    def erlang_b(traffic, agents):
+        return erlang_b(traffic, agents)
+
+    @staticmethod
+    def erlang_c(traffic, agents):
+        return erlang_c(traffic, agents)
+
 class CHAT:
     """Módulo Chat Multi-canal"""
     
@@ -293,16 +302,33 @@ class CHAT:
         return max(1, round(result.x, 1))
     
     @staticmethod
-    def asa(forecast, aht_list, agents, lines, patience):
-        parallel_capacity = len(aht_list)
-        avg_aht = sum(aht_list) / len(aht_list)
-        effectiveness = 0.7 + (0.3 / parallel_capacity)
-        effective_agents = agents * parallel_capacity * effectiveness
-        return waiting_time_erlang_c(forecast, avg_aht, effective_agents)
+    def asa(forecast, aht_list, agents, lines=None, patience=None):
+        if isinstance(aht_list, list):
+            parallel_capacity = len(aht_list)
+            avg_aht = sum(aht_list) / len(aht_list)
+            effectiveness = 0.7 + (0.3 / parallel_capacity)
+            effective_agents = agents * parallel_capacity * effectiveness
+            return waiting_time_erlang_c(forecast, avg_aht, effective_agents)
+        else:
+            traffic = forecast
+            agents_val = aht_list
+            aht = agents
+            forecast_rate = traffic / aht if aht else 0
+            return waiting_time_erlang_c(forecast_rate, aht, agents_val)
 
+    @staticmethod
+    def service_level(traffic, agents, aht, awt):
+        forecast_rate = traffic / aht if aht else 0
+        return service_level_erlang_c(forecast_rate, aht, agents, awt)
+
+    @staticmethod
+    def required_agents(traffic, aht, sl_target, awt):
+        forecast_rate = traffic / aht if aht else 0
+        return int(X.AGENTS.for_sla(sl_target, forecast_rate, aht, awt))
 class BL:
     """Módulo Blending"""
-    
+
+
     @staticmethod
     def sla(forecast, aht, agents, awt, lines, patience, threshold):
         available_agents = max(0, agents - threshold)
@@ -327,11 +353,23 @@ class BL:
         
         result = optimize.minimize_scalar(objective, bounds=(0, agents), method='bounded')
         return max(0, round(result.x, 1))
+    @staticmethod
+    def sensitivity(traffic_range, agents, aht, target):
+        data = []
+        for t in traffic_range:
+            sl = service_level_erlang_c(t, aht, agents, target)
+            data.append({"traffic": t, "service_level": sl})
+        return pd.DataFrame(data)
+
+    @staticmethod
+    def monte_carlo(traffic, agents, aht, target, iters=100):
+        results = [service_level_erlang_c(traffic, aht, agents, target) for _ in range(iters)]
+        return pd.Series(results)
+
 
 # =============================================================================
 # INTERFAZ STREAMLIT
 # =============================================================================
-
 def main():
     # Header
     st.markdown('<h1 class="main-header">📞 Erlang Calculator Pro</h1>', unsafe_allow_html=True)
@@ -945,23 +983,6 @@ def show_methodology():
         - **Abandonment**: % de clientes que cuelgan antes de ser atendidos
         """)
 
-def main():
-    # Mostrar metodología al final
-    show_methodology()
-
-if __name__ == "__main__":
-    main() ASA por Número de Agentes",
-        xaxis_title="Número de Agentes",
-        yaxis=dict(title="Service Level", side="left", range=[0, 1]),
-        yaxis2=dict(title="ASA (minutos)", side="right", overlaying="y"),
-        hovermode='x unified'
-    )
-    
-    # Línea vertical para agentes actuales
-    fig.add_vline(x=agents, line_dash="dash", line_color="green", annotation_text="Actual")
-    fig.add_vline(x=recommended_agents, line_dash="dash", line_color="orange", annotation_text="Recomendado")
-    
-    st.plotly_chart(fig, use_container_width=True)
 
 def chat_interface():
     st.header("💬 Chat Multi-canal Calculator")
@@ -1152,6 +1173,24 @@ def blending_interface():
         yaxis='y2',
         line=dict(color='green')
     ))
-    
     fig.update_layout(
-        title="Service Level vs
+        title="Service Level vs Capacidad Outbound por Threshold",
+        xaxis_title="Threshold (Agentes Reservados)",
+        yaxis=dict(title="Service Level Inbound", side="left", range=[0, 1]),
+        yaxis2=dict(title="Capacidad Outbound (llamadas/hora)", side="right", overlaying="y"),
+        hovermode='x unified'
+    )
+
+    fig.add_vline(x=threshold, line_dash="dash", line_color="red", annotation_text="Actual")
+    fig.add_vline(x=optimal_threshold, line_dash="dash", line_color="orange", annotation_text="Óptimo")
+
+    st.plotly_chart(fig, use_container_width=True)
+
+
+
+def run_app():
+    main()
+
+if __name__ == "__main__":
+    run_app()
+
