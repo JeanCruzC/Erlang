@@ -229,8 +229,9 @@ class X:
         @staticmethod
         def for_sla(sl_target, forecast, aht, awt, lines=None, patience=None):
             traffic = forecast * aht
-            
+
             def objective(agents):
+                agents = int(round(agents))
                 if agents <= 0:
                     return float('inf')
                 sl = X.SLA.calculate(forecast, aht, agents, awt, lines, patience)
@@ -242,8 +243,9 @@ class X:
         @staticmethod
         def for_asa(asa_target, forecast, aht, lines=None, patience=None):
             traffic = forecast * aht
-            
+
             def objective(agents):
+                agents = int(round(agents))
                 if agents <= traffic:
                     return float('inf')
                 actual_asa = waiting_time_erlang_c(forecast, aht, agents)
@@ -263,6 +265,16 @@ class X:
     @staticmethod
     def abandonment(forecast, aht, agents, lines, patience):
         return erlang_x_abandonment(forecast, aht, agents, lines, patience)
+
+    @staticmethod
+    def erlang_b(traffic, agents):
+        """Wrapper around module-level ``erlang_b`` function."""
+        return erlang_b(traffic, agents)
+
+    @staticmethod
+    def erlang_c(traffic, agents):
+        """Wrapper around module-level ``erlang_c`` function."""
+        return erlang_c(traffic, agents)
 
 class CHAT:
     """Módulo Chat Multi-canal"""
@@ -293,12 +305,26 @@ class CHAT:
         return max(1, round(result.x, 1))
     
     @staticmethod
-    def asa(forecast, aht_list, agents, lines, patience):
-        parallel_capacity = len(aht_list)
-        avg_aht = sum(aht_list) / len(aht_list)
+    def asa(forecast, aht_list, agents, lines=None, patience=None):
+        if isinstance(aht_list, (int, float)):
+            parallel_capacity = 1
+            avg_aht = float(aht_list)
+        else:
+            parallel_capacity = len(aht_list)
+            avg_aht = sum(aht_list) / len(aht_list)
         effectiveness = 0.7 + (0.3 / parallel_capacity)
         effective_agents = agents * parallel_capacity * effectiveness
-        return waiting_time_erlang_c(forecast, avg_aht, effective_agents)
+        return waiting_time_erlang_c(forecast, avg_aht, int(round(effective_agents)))
+
+    @staticmethod
+    def service_level(forecast, aht, agents, awt):
+        """Simplified service level based on Erlang C"""
+        return service_level_erlang_c(forecast, aht, agents, awt)
+
+    @staticmethod
+    def required_agents(forecast, aht, sl_target, awt):
+        """Estimate agents required for target service level"""
+        return int(round(X.AGENTS.for_sla(sl_target, forecast, aht, awt)))
 
 class BL:
     """Módulo Blending"""
@@ -327,6 +353,26 @@ class BL:
         
         result = optimize.minimize_scalar(objective, bounds=(0, agents), method='bounded')
         return max(0, round(result.x, 1))
+
+    @staticmethod
+    def sensitivity(traffic_range, agents, aht, target):
+        """Return DataFrame of service level for a range of traffic values."""
+        data = {"traffic": [], "service_level": []}
+        for t in traffic_range:
+            sl = service_level_erlang_c(t, aht, agents, target)
+            data["traffic"].append(t)
+            data["service_level"].append(sl)
+        return pd.DataFrame(data)
+
+    @staticmethod
+    def monte_carlo(traffic, agents, aht, target, iters=100):
+        """Generate service level samples with Poisson variation."""
+        results = []
+        for _ in range(iters):
+            sampled = np.random.poisson(traffic)
+            sl = service_level_erlang_c(sampled, aht, agents, target)
+            results.append(sl)
+        return pd.Series(results)
 
 # =============================================================================
 # INTERFAZ STREAMLIT
@@ -949,19 +995,6 @@ def main():
     # Mostrar metodología al final
     show_methodology()
 
-if __name__ == "__main__":
-    main() ASA por Número de Agentes",
-        xaxis_title="Número de Agentes",
-        yaxis=dict(title="Service Level", side="left", range=[0, 1]),
-        yaxis2=dict(title="ASA (minutos)", side="right", overlaying="y"),
-        hovermode='x unified'
-    )
-    
-    # Línea vertical para agentes actuales
-    fig.add_vline(x=agents, line_dash="dash", line_color="green", annotation_text="Actual")
-    fig.add_vline(x=recommended_agents, line_dash="dash", line_color="orange", annotation_text="Recomendado")
-    
-    st.plotly_chart(fig, use_container_width=True)
 
 def chat_interface():
     st.header("💬 Chat Multi-canal Calculator")
@@ -1153,5 +1186,10 @@ def blending_interface():
         line=dict(color='green')
     ))
     
-    fig.update_layout(
-        title="Service Level vs
+    fig.update_layout(title="Threshold Analysis")
+    st.plotly_chart(fig, use_container_width=True)
+
+def run_app():
+    main()
+
+
