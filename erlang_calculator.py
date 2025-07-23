@@ -517,16 +517,16 @@ def erlang_x_interface():
     ))
     
     fig.update_layout(
-        title="Service Level vs Capacidad Outbound por Threshold",
-        xaxis_title="Threshold (Agentes Reservados)",
-        yaxis=dict(title="Service Level Inbound", side="left", range=[0, 1]),
-        yaxis2=dict(title="Capacidad Outbound (llamadas/hora)", side="right", overlaying="y"),
+        title="Service Level y ASA vs Número de Agentes",
+        xaxis_title="Número de Agentes",
+        yaxis=dict(title="Service Level", side="left", range=[0, 1]),
+        yaxis2=dict(title="ASA (minutos)", side="right", overlaying="y"),
         hovermode='x unified'
     )
-    
+
     # Líneas de referencia
-    fig.add_vline(x=threshold, line_dash="dash", line_color="red", annotation_text="Actual")
-    fig.add_vline(x=optimal_threshold, line_dash="dash", line_color="orange", annotation_text="Óptimo")
+    fig.add_vline(x=agents, line_dash="dash", line_color="red", annotation_text="Actual")
+    fig.add_vline(x=recommended_agents, line_dash="dash", line_color="orange", annotation_text="Recomendado")
     
     st.plotly_chart(fig, use_container_width=True)
 
