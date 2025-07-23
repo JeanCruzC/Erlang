@@ -412,9 +412,10 @@ def erlang_x_interface():
     
     with col1:
         st.subheader("📝 Parámetros de Entrada")
-        forecast = st.number_input("Forecast (llamadas/hora)", min_value=1.0, value=100.0, step=1.0)
+        forecast = st.number_input("Forecast (llamadas por intervalo)", min_value=1.0, value=100.0, step=1.0)
+        interval_choice = st.selectbox("Intervalo del forecast", ["30 minutos", "1 hora"], index=1)
+        interval_seconds = 1800 if interval_choice == "30 minutos" else 3600
         aht = st.number_input("AHT (segundos)", min_value=1.0, value=240.0, step=1.0)
-        interval_seconds = st.number_input("Duración del intervalo (segundos)", min_value=1.0, value=3600.0, step=1.0)
         agents = int(st.number_input("Agentes", min_value=1, value=25, step=1))
         awt = st.number_input("AWT (segundos)", min_value=1.0, value=20.0, step=1.0)
         
@@ -695,8 +696,9 @@ def comparative_analysis():
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        forecast_comp = st.number_input("Forecast común", min_value=1.0, value=150.0, step=1.0)
-        interval_seconds_comp = st.number_input("Duración del intervalo (segundos)", min_value=1.0, value=3600.0, step=1.0)
+        forecast_comp = st.number_input("Forecast común (llamadas por intervalo)", min_value=1.0, value=150.0, step=1.0)
+        interval_choice_comp = st.selectbox("Intervalo del forecast", ["30 minutos", "1 hora"], index=1, key="interval_comp")
+        interval_seconds_comp = 1800 if interval_choice_comp == "30 minutos" else 3600
         aht_comp = st.number_input("AHT común (seg)", min_value=1.0, value=240.0, step=1.0)
     
     with col2:
@@ -1005,8 +1007,9 @@ def chat_interface():
     
     with col1:
         st.subheader("📝 Parámetros Chat")
-        forecast = st.number_input("Chats por hora", min_value=1.0, value=200.0, step=1.0)
-        interval_seconds_chat = st.number_input("Duración del intervalo (segundos)", min_value=1.0, value=3600.0, step=1.0)
+        forecast = st.number_input("Chats por intervalo", min_value=1.0, value=200.0, step=1.0)
+        interval_choice_chat = st.selectbox("Intervalo del forecast", ["30 minutos", "1 hora"], index=1, key="interval_chat")
+        interval_seconds_chat = 1800 if interval_choice_chat == "30 minutos" else 3600
         
         st.subheader("⏱️ AHT por Número de Chats Simultáneos")
         max_chats = st.selectbox("Máximo chats simultáneos por agente", [1, 2, 3, 4, 5], index=2)
@@ -1097,8 +1100,9 @@ def blending_interface():
     
     with col1:
         st.subheader("📝 Parámetros Blending")
-        inbound_forecast = st.number_input("Forecast Inbound (llamadas/hora)", min_value=1.0, value=120.0, step=1.0)
-        interval_seconds_blend = st.number_input("Duración del intervalo (segundos)", min_value=1.0, value=3600.0, step=1.0)
+        inbound_forecast = st.number_input("Forecast Inbound (llamadas por intervalo)", min_value=1.0, value=120.0, step=1.0)
+        interval_choice_blend = st.selectbox("Intervalo del forecast", ["30 minutos", "1 hora"], index=1, key="interval_blend")
+        interval_seconds_blend = 1800 if interval_choice_blend == "30 minutos" else 3600
         inbound_aht = st.number_input("AHT Inbound (segundos)", min_value=1.0, value=210.0, step=1.0)
         outbound_aht = st.number_input("AHT Outbound (segundos)", min_value=1.0, value=300.0, step=1.0)
         total_agents = int(st.number_input("Total Agentes", min_value=1, value=30, step=1))
