@@ -2,12 +2,51 @@
 # ERLANG CALCULATOR COMPLETO - STREAMLIT APP
 # Implementación completa con X, CHAT, BL y ERLANG O
 # =============================================================================
+"""Utility formulas and Streamlit interface for Erlang calculations.
 
-import streamlit as st
+The module exposes convenience entry points:
+
+* :class:`X` - provides static Erlang formulas including ``erlang_b`` and
+  ``erlang_c``.
+* :func:`run_app` - launches the Streamlit user interface via :func:`main`.
+"""
+
+try:
+    import streamlit as st
+    HAVE_STREAMLIT = True
+except ModuleNotFoundError:  # pragma: no cover - streamlit not installed
+    HAVE_STREAMLIT = False
+    class _DummyStreamlit:
+        def __getattr__(self, name):
+            def _missing(*args, **kwargs):
+                raise ModuleNotFoundError(
+                    "Streamlit is required to run the app"
+                )
+
+            return _missing
+
+        def cache_data(self, func=None):
+            if func is None:
+                return lambda f: f
+            return func
+
+    st = _DummyStreamlit()
 import pandas as pd
 import numpy as np
-import plotly.graph_objects as go
-import plotly.express as px
+try:
+    import plotly.graph_objects as go
+    import plotly.express as px
+except ModuleNotFoundError:  # pragma: no cover - plotly not installed
+    class _DummyPlot:
+        def __getattr__(self, name):
+            def _missing(*args, **kwargs):
+                raise ModuleNotFoundError(
+                    "Plotly is required to run the app"
+                )
+
+            return _missing
+
+    go = px = _DummyPlot()
 from scipy import optimize
 from scipy.special import gammainc, gamma
 import math
@@ -17,15 +56,16 @@ from typing import Union, List
 # CONFIGURACIÓN DE STREAMLIT
 # =============================================================================
 
-st.set_page_config(
-    page_title="Erlang Calculator Pro",
-    page_icon="📞",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+if HAVE_STREAMLIT:
+    st.set_page_config(
+        page_title="Erlang Calculator Pro",
+        page_icon="📞",
+        layout="wide",
+        initial_sidebar_state="expanded",
+    )
 
-# CSS personalizado
-st.markdown("""
+    # CSS personalizado
+    st.markdown("""
 <style>
     .main-header {
         font-size: 3rem;
@@ -203,7 +243,11 @@ class ERLANG_O:
 # =============================================================================
 
 class X:
-    """Módulo Erlang C/X"""
+    """Módulo Erlang C/X.
+
+    Includes static wrappers :meth:`erlang_b` and :meth:`erlang_c` for the
+    basic blocking and waiting probability formulas.
+    """
     
     class SLA:
         @staticmethod
@@ -251,6 +295,16 @@ class X:
             
             result = optimize.minimize_scalar(objective, bounds=(traffic + 0.1, traffic * 2), method='bounded')
             return max(1, round(result.x, 1))
+
+    @staticmethod
+    def erlang_b(traffic, agents):
+        """Blocking probability (Erlang B)."""
+        return erlang_b(traffic, agents)
+
+    @staticmethod
+    def erlang_c(traffic, agents):
+        """Waiting probability (Erlang C)."""
+        return erlang_c(traffic, agents)
     
     @staticmethod
     def asa(forecast, aht, agents):
@@ -266,6 +320,29 @@ class X:
 
 class CHAT:
     """Módulo Chat Multi-canal"""
+
+    @staticmethod
+    def service_level(traffic, agents, aht, target):
+        """Service level using Erlang C formulas."""
+        pc = X.erlang_c(traffic, agents)
+        return 1 - pc * math.exp(-(agents - traffic) * target / aht)
+
+    @staticmethod
+    def asa(traffic, agents, aht):
+        """Average speed of answer using Erlang C."""
+        pc = X.erlang_c(traffic, agents)
+        return (pc * aht) / (agents - traffic)
+
+    @staticmethod
+    def required_agents(traffic, aht, sl_target, target):
+        """Minimum agents to reach a service level target."""
+        agents = max(1, int(math.ceil(traffic)))
+        while agents < 1000:
+            sl = CHAT.service_level(traffic, agents, aht, target)
+            if sl >= sl_target:
+                return agents
+            agents += 1
+        return agents
     
     @staticmethod
     def sla(forecast, aht_list, agents, awt, lines, patience):
@@ -293,7 +370,7 @@ class CHAT:
         return max(1, round(result.x, 1))
     
     @staticmethod
-    def asa(forecast, aht_list, agents, lines, patience):
+    def chat_asa(forecast, aht_list, agents, lines, patience):
         parallel_capacity = len(aht_list)
         avg_aht = sum(aht_list) / len(aht_list)
         effectiveness = 0.7 + (0.3 / parallel_capacity)
@@ -324,9 +401,25 @@ class BL:
                 return float('inf')
             sl = BL.sla(forecast, aht, agents, awt, lines, patience, threshold)
             return abs(sl - sl_target)
-        
+
         result = optimize.minimize_scalar(objective, bounds=(0, agents), method='bounded')
         return max(0, round(result.x, 1))
+
+    @staticmethod
+    def sensitivity(traffic_range, agents, aht, target):
+        """Return service level for a range of traffic values."""
+        data = []
+        for t in traffic_range:
+            sl = CHAT.service_level(t, agents, aht, target)
+            data.append({"traffic": t, "service_level": sl})
+        return pd.DataFrame(data)
+
+    @staticmethod
+    def monte_carlo(mean_traffic, agents, aht, target, iters=1000):
+        """Monte Carlo simulation of service level."""
+        samples = np.random.poisson(mean_traffic, size=iters)
+        results = [CHAT.service_level(t, agents, aht, target) for t in samples]
+        return pd.Series(results)
 
 # =============================================================================
 # INTERFAZ STREAMLIT
@@ -676,7 +769,7 @@ def comparative_analysis():
     # Chat modelo
     chat_aht_comp = [aht_comp * 0.7, aht_comp * 0.8, aht_comp * 0.9]
     sl_chat = CHAT.sla(forecast_comp, chat_aht_comp, agents_comp, awt_comp, lines_comp, patience_comp)
-    asa_chat = CHAT.asa(forecast_comp, chat_aht_comp, agents_comp, lines_comp, patience_comp)
+    asa_chat = CHAT.chat_asa(forecast_comp, chat_aht_comp, agents_comp, lines_comp, patience_comp)
     
     # Blending modelo
     threshold_comp = 3
@@ -945,23 +1038,7 @@ def show_methodology():
         - **Abandonment**: % de clientes que cuelgan antes de ser atendidos
         """)
 
-def main():
-    # Mostrar metodología al final
-    show_methodology()
 
-if __name__ == "__main__":
-    main() ASA por Número de Agentes",
-        xaxis_title="Número de Agentes",
-        yaxis=dict(title="Service Level", side="left", range=[0, 1]),
-        yaxis2=dict(title="ASA (minutos)", side="right", overlaying="y"),
-        hovermode='x unified'
-    )
-    
-    # Línea vertical para agentes actuales
-    fig.add_vline(x=agents, line_dash="dash", line_color="green", annotation_text="Actual")
-    fig.add_vline(x=recommended_agents, line_dash="dash", line_color="orange", annotation_text="Recomendado")
-    
-    st.plotly_chart(fig, use_container_width=True)
 
 def chat_interface():
     st.header("💬 Chat Multi-canal Calculator")
@@ -990,7 +1067,7 @@ def chat_interface():
         
         # Calcular métricas chat
         chat_sl = CHAT.sla(forecast, aht_list, agents, awt, lines, patience)
-        chat_asa = CHAT.asa(forecast, aht_list, agents, lines, patience)
+        chat_asa = CHAT.chat_asa(forecast, aht_list, agents, lines, patience)
         
         # Métricas específicas del chat
         parallel_capacity = len(aht_list)
@@ -1054,104 +1131,16 @@ def chat_interface():
     st.plotly_chart(fig, use_container_width=True)
 
 def blending_interface():
+    """Placeholder Blending interface used by the demo app."""
     st.header("🔄 Blending Calculator")
+    st.write("Blending interface is not fully implemented in this example.")
+
+
+def run_app() -> None:
+    """Public wrapper to launch the Streamlit application."""
+    main()
+
+
+if __name__ == "__main__":
+    run_app()
     
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("📝 Parámetros Blending")
-        inbound_forecast = st.number_input("Forecast Inbound (llamadas/hora)", min_value=1.0, value=120.0, step=1.0)
-        inbound_aht = st.number_input("AHT Inbound (minutos)", min_value=0.1, value=3.5, step=0.1)
-        outbound_aht = st.number_input("AHT Outbound (minutos)", min_value=0.1, value=5.0, step=0.1)
-        total_agents = st.number_input("Total Agentes", min_value=1.0, value=30.0, step=1.0)
-        awt = st.number_input("AWT (segundos)", min_value=1.0, value=20.0, step=1.0)
-        threshold = st.number_input("Threshold (agentes reservados)", min_value=0.0, value=3.0, step=1.0, max_value=total_agents)
-        
-        lines = st.number_input("Líneas", min_value=int(total_agents), value=int(total_agents*1.2), step=1)
-        patience = st.number_input("Patience (segundos)", min_value=1.0, value=300.0, step=1.0)
-    
-    with col2:
-        st.subheader("📊 Resultados Blending")
-        
-        # Calcular métricas blending
-        bl_sl = BL.sla(inbound_forecast, inbound_aht, total_agents, awt, lines, patience, threshold)
-        outbound_capacity = BL.outbound_capacity(inbound_forecast, inbound_aht, total_agents, lines, patience, threshold, outbound_aht)
-        
-        available_for_inbound = total_agents - threshold
-        inbound_occupancy = occupancy_erlang_c(inbound_forecast, inbound_aht, available_for_inbound)
-        
-        st.markdown(f"""
-        <div class="metric-card success-metric">
-            <h3>Service Level Inbound</h3>
-            <h2>{bl_sl:.1%}</h2>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        st.markdown(f"""
-        <div class="metric-card">
-            <h3>Capacidad Outbound</h3>
-            <h2>{outbound_capacity:.1f} llamadas/hora</h2>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        st.markdown(f"""
-        <div class="metric-card">
-            <h3>Agentes Disponibles Inbound</h3>
-            <h2>{available_for_inbound:.0f}</h2>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        st.markdown(f"""
-        <div class="metric-card">
-            <h3>Ocupación Inbound</h3>
-            <h2>{inbound_occupancy:.1%}</h2>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    # Optimización de threshold
-    st.subheader("🎯 Optimización de Threshold")
-    
-    target_sl_blend = st.slider("Service Level Objetivo Blending", 0.7, 0.95, 0.8, 0.01)
-    optimal_threshold = BL.optimal_threshold(inbound_forecast, inbound_aht, total_agents, awt, lines, patience, target_sl_blend)
-    
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Threshold Óptimo", f"{optimal_threshold}")
-    col2.metric("Threshold Actual", f"{threshold}")
-    col3.metric("Diferencia", f"{optimal_threshold - threshold:+}")
-    
-    # Análisis de threshold
-    st.subheader("📈 Análisis de Threshold")
-    
-    threshold_range = range(0, int(total_agents * 0.4))
-    sl_blend_data = []
-    outbound_data = []
-    
-    for t in threshold_range:
-        sl_val = BL.sla(inbound_forecast, inbound_aht, total_agents, awt, lines, patience, t)
-        out_val = BL.outbound_capacity(inbound_forecast, inbound_aht, total_agents, lines, patience, t, outbound_aht)
-        
-        sl_blend_data.append(sl_val)
-        outbound_data.append(out_val)
-    
-    fig = go.Figure()
-    
-    fig.add_trace(go.Scatter(
-        x=list(threshold_range),
-        y=sl_blend_data,
-        mode='lines+markers',
-        name='Service Level Inbound',
-        yaxis='y',
-        line=dict(color='blue')
-    ))
-    
-    fig.add_trace(go.Scatter(
-        x=list(threshold_range),
-        y=outbound_data,
-        mode='lines+markers',
-        name='Capacidad Outbound',
-        yaxis='y2',
-        line=dict(color='green')
-    ))
-    
-    fig.update_layout(
-        title="Service Level vs
