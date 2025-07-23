@@ -9,9 +9,7 @@ import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
 from scipy import optimize
-from scipy.special import gammainc, gamma
 import math
-from typing import Union, List
 
 # =============================================================================
 # CONFIGURACIÓN DE STREAMLIT
