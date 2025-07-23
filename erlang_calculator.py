@@ -40,11 +40,23 @@ class CHAT:
         return 1 - c * np.exp(-(agents - traffic) * target / aht)
 
     @staticmethod
+    def service_level_multi(traffic, agents, aht, target, concurrency=1.0):
+        """Service level when agents handle multiple chats concurrently."""
+        eff_traffic = traffic / max(concurrency, 1.0)
+        return CHAT.service_level(eff_traffic, agents, aht, target)
+
+    @staticmethod
     def asa(traffic, agents, aht):
         c = X.erlang_c(traffic, agents)
         if agents <= traffic:
             return np.inf
         return (c / (agents - traffic)) * aht
+
+    @staticmethod
+    def asa_multi(traffic, agents, aht, concurrency=1.0):
+        """Average speed of answer with chat concurrency."""
+        eff_traffic = traffic / max(concurrency, 1.0)
+        return CHAT.asa(eff_traffic, agents, aht)
 
     @staticmethod
     def required_agents(traffic, aht, target_service, target_time=20):
@@ -54,6 +66,12 @@ class CHAT:
 
         res = minimize(objective, x0=[traffic], bounds=[(traffic, traffic * 10)])
         return int(np.ceil(res.x[0]))
+
+    @staticmethod
+    def required_agents_multi(traffic, aht, target_service, target_time=20, concurrency=1.0):
+        """Required agents when each handles multiple chats."""
+        eff_traffic = traffic / max(concurrency, 1.0)
+        return CHAT.required_agents(eff_traffic, aht, target_service, target_time)
 
 class BL:
     """Advanced analysis tools."""
@@ -67,9 +85,25 @@ class BL:
         return pd.DataFrame(rows)
 
     @staticmethod
+    def sensitivity_multi(traffic_range, agents, aht, target, concurrency=1.0):
+        """Sensitivity analysis with chat concurrency."""
+        rows = []
+        for t in traffic_range:
+            sl = CHAT.service_level_multi(t, agents, aht, target, concurrency)
+            rows.append({'traffic': t, 'service_level': sl})
+        return pd.DataFrame(rows)
+
+    @staticmethod
     def monte_carlo(mean_traffic, agents, aht, target, iters=1000):
         samples = np.random.poisson(mean_traffic, size=iters)
         results = [CHAT.service_level(s, agents, aht, target) for s in samples]
+        return pd.Series(results)
+
+    @staticmethod
+    def monte_carlo_multi(mean_traffic, agents, aht, target, concurrency=1.0, iters=1000):
+        """Monte Carlo simulation with chat concurrency."""
+        samples = np.random.poisson(mean_traffic, size=iters)
+        results = [CHAT.service_level_multi(s, agents, aht, target, concurrency) for s in samples]
         return pd.Series(results)
 
 

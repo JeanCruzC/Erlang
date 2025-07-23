@@ -14,13 +14,14 @@ The script installs the packages listed in `requirements.txt` (`scipy`, `numpy`,
 
 ## Running the Streamlit App
 
-After installing the requirements you can run the Streamlit interface:
+After installing the requirements you can run the Streamlit interfaces:
 
 ```bash
-streamlit run erlang_calculator.py
+streamlit run erlang_calculator.py       # basic single-queue app
+streamlit run multichat_app.py           # multi-chat calculations
 ```
 
-The app computes Erlang B blocking probability, Erlang C waiting probability, service level, and average speed of answer. It also provides sensitivity analysis, Monte Carlo simulation, and staffing optimisation tools.
+Both apps compute Erlang B blocking probability, Erlang C waiting probability, service level, and average speed of answer. They also provide sensitivity analysis, Monte Carlo simulation, and staffing optimisation tools. `multichat_app.py` additionally supports chat concurrency and multiple queues.
 
 ## Parameters
 
