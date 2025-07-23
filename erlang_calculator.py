@@ -125,7 +125,7 @@ def create_agent_visualization(forecast, aht, agents, awt, interval_seconds=3600
         pc = erlang_c(arrival_rate * aht, agents)
         queue_length = max(0, int(pc * arrival_rate * asa))
 
-    queue_x = agents_per_row * 1.2 + 2
+    queue_x = 15
     queue_start_y = rows - 1
 
     if queue_length > 0:
@@ -179,7 +179,7 @@ def create_agent_visualization(forecast, aht, agents, awt, interval_seconds=3600
                 )
             )
 
-    metrics_x = queue_x + 3
+    metrics_x = 25
     metrics_y = rows - 1
 
     sl_color = "#4ECDC4" if sl >= 0.8 else "#F7DC6F" if sl >= 0.7 else "#FF6B6B"
@@ -201,7 +201,7 @@ def create_agent_visualization(forecast, aht, agents, awt, interval_seconds=3600
     fig.add_trace(
         go.Scatter(
             x=[metrics_x],
-            y=[metrics_y - 1.5],
+            y=[metrics_y - 2],
             mode="markers+text",
             marker=dict(size=60, color=asa_color, symbol="circle"),
             text=[f"{asa:.0f}s"],
@@ -216,7 +216,7 @@ def create_agent_visualization(forecast, aht, agents, awt, interval_seconds=3600
     fig.add_trace(
         go.Scatter(
             x=[metrics_x],
-            y=[metrics_y - 3],
+            y=[metrics_y - 4],
             mode="markers+text",
             marker=dict(size=60, color=occ_color, symbol="circle"),
             text=[f"{occupancy:.0%}"],
@@ -267,14 +267,15 @@ def create_agent_visualization(forecast, aht, agents, awt, interval_seconds=3600
             "x": 0.5,
             "font": {"size": 18},
         },
-        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[-1, metrics_x + 2]),
-        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[-1, rows + 1]),
+        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[-1, metrics_x + 5]),
+        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[-5, rows + 1]),
         plot_bgcolor="#F8F9FA",
         paper_bgcolor="white",
         showlegend=True,
         legend=dict(orientation="h", yanchor="bottom", y=-0.1, xanchor="center", x=0.5),
         height=400 + (rows * 50),
-        margin=dict(l=50, r=50, t=80, b=100),
+        width=max(1000, int((metrics_x + 5) * 40)),
+        margin=dict(l=80, r=80, t=80, b=100),
     )
 
     return fig
