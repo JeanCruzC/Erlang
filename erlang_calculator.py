@@ -1529,6 +1529,72 @@ def staffing_optimizer():
 # BATCH PROCESSING
 # =============================================================================
 
+
+def process_batch_row(row, sl_target, awt, interval_seconds, default_channel):
+    """Compute metrics for a single batch row.
+
+    Parameters
+    ----------
+    row : pd.Series
+        Row of input dataframe with at least Contactos, AHT and
+        Agentes_Actuales columns. Optionally Intervalo_Segundos and
+        Tipo_Canal.
+    sl_target : float
+        Desired service level.
+    awt : float
+        Target answer time in seconds.
+    interval_seconds : int
+        Default interval duration if not provided in the row.
+    default_channel : str
+        Default channel type when the row does not specify one.
+
+    Returns
+    -------
+    dict
+        Dictionary of calculated metrics.
+    """
+
+    seconds = row.get("Intervalo_Segundos", interval_seconds)
+    channel = str(row.get("Tipo_Canal", default_channel)).strip().title()
+    if channel not in ["Llamadas", "Chat"]:
+        channel = "Llamadas"
+
+    arrival_rate = row["Contactos"] / seconds
+
+    if channel == "Chat":
+        # Chat calculations assume single chat AHT as provided
+        aht_list = [row["AHT"]]
+        sl = CHAT.sla(arrival_rate, aht_list, row["Agentes_Actuales"], awt, None, None)
+        asa = CHAT.asa(arrival_rate, aht_list, row["Agentes_Actuales"])
+        occupancy = occupancy_erlang_c(arrival_rate, row["AHT"], row["Agentes_Actuales"])
+        agents_req = CHAT.agents_for_sla(sl_target, arrival_rate, aht_list, awt, None, None)
+        sl_req = CHAT.sla(arrival_rate, aht_list, agents_req, awt, None, None)
+        asa_req = CHAT.asa(arrival_rate, aht_list, agents_req)
+        occupancy_req = occupancy_erlang_c(arrival_rate, row["AHT"], agents_req)
+    else:
+        sl = service_level_erlang_c(arrival_rate, row["AHT"], row["Agentes_Actuales"], awt)
+        asa = waiting_time_erlang_c(arrival_rate, row["AHT"], row["Agentes_Actuales"])
+        occupancy = occupancy_erlang_c(arrival_rate, row["AHT"], row["Agentes_Actuales"])
+        agents_req = X.AGENTS.for_sla(sl_target, arrival_rate, row["AHT"], awt)
+        sl_req = service_level_erlang_c(arrival_rate, row["AHT"], agents_req, awt)
+        asa_req = waiting_time_erlang_c(arrival_rate, row["AHT"], agents_req)
+        occupancy_req = occupancy_erlang_c(arrival_rate, row["AHT"], agents_req)
+
+    diff_agents = agents_req - row["Agentes_Actuales"]
+
+    return {
+        "SL": sl,
+        "ASA": asa,
+        "Ocupacion": occupancy,
+        "Agentes_Requeridos": agents_req,
+        "SL_Requerido": sl_req,
+        "ASA_Requerido": asa_req,
+        "Ocupacion_Requerido": occupancy_req,
+        "Diferencia_Agentes": diff_agents,
+        "Tipo_Canal": channel,
+    }
+
+
 def batch_processor():
     st.header("📂 Batch Processor")
 
@@ -1557,42 +1623,67 @@ def batch_processor():
     else:
         interval_seconds = None
 
-    channel = st.text_input("Tipo de canal", "llamadas")
+    default_channel = st.selectbox("Tipo de canal por defecto", ["Llamadas", "Chat"])
 
-    results = df.copy()
-    for idx, row in results.iterrows():
-        seconds = row.get("Intervalo_Segundos", interval_seconds or 3600)
-        arrival_rate = row["Contactos"] / seconds
-        sl = service_level_erlang_c(
-            arrival_rate, row["AHT"], row["Agentes_Actuales"], awt
-        )
-        asa = waiting_time_erlang_c(
-            arrival_rate, row["AHT"], row["Agentes_Actuales"]
-        )
-        occupancy = occupancy_erlang_c(
-            arrival_rate, row["AHT"], row["Agentes_Actuales"]
-        )
-        agents_req = X.AGENTS.for_sla(sl_target, arrival_rate, row["AHT"], awt)
+    if "Tipo_Canal" not in df.columns:
+        df["Tipo_Canal"] = default_channel
 
-        results.at[idx, "SL"] = sl
-        results.at[idx, "ASA"] = asa
-        results.at[idx, "Ocupacion"] = occupancy
-        results.at[idx, "Agentes_Requeridos"] = agents_req
-        results.at[idx, "Canal"] = channel
+    if interval_seconds is None:
+        interval_seconds = df.get("Intervalo_Segundos", pd.Series([3600]*len(df))).iloc[0]
 
-    st.dataframe(results, use_container_width=True)
+    processed_rows = []
+    for _, row in df.iterrows():
+        metrics = process_batch_row(row, sl_target, awt, interval_seconds, default_channel)
+        processed_rows.append({**row, **metrics})
 
-    csv_data = results.to_csv(index=False).encode("utf-8")
+    results = pd.DataFrame(processed_rows)
+
+    columnas_display = [
+        "Contactos",
+        "AHT",
+        "Agentes_Actuales",
+        "Tipo_Canal",
+        "SL",
+        "ASA",
+        "Ocupacion",
+        "Agentes_Requeridos",
+        "SL_Requerido",
+        "ASA_Requerido",
+        "Ocupacion_Requerido",
+        "Diferencia_Agentes",
+    ]
+
+    def color_row(row):
+        color = "#d4edda" if row["SL"] >= row["SL_Requerido"] else "#f8d7da"
+        return [f"background-color: {color}"] * len(row)
+
+    st.dataframe(results[columnas_display].style.apply(color_row, axis=1), use_container_width=True)
+
+    csv_data = export_results(results).to_csv(index=False).encode("utf-8")
     st.download_button("Descargar CSV", csv_data, "batch_result.csv", "text/csv")
 
     excel_buffer = io.BytesIO()
-    results.to_excel(excel_buffer, index=False)
+    export_results(results).to_excel(excel_buffer, index=False)
     st.download_button(
         "Descargar Excel",
         excel_buffer.getvalue(),
         "batch_result.xlsx",
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
+
+
+def export_results(df_processed):
+    """Return dataframe with status and recommendation columns."""
+    df_exp = df_processed.copy()
+    df_exp["Status_SL"] = np.where(
+        df_exp["SL"] >= df_exp["SL_Requerido"], "OK", "BAJO"
+    )
+    df_exp["Recomendacion"] = np.where(
+        df_exp["Diferencia_Agentes"] > 0,
+        "Agregar " + df_exp["Diferencia_Agentes"].astype(str),
+        "Mantener",
+    )
+    return df_exp
 
 # =============================================================================
 # FUNCIONES AUXILIARES
