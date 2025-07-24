@@ -1568,17 +1568,19 @@ def process_batch_row(row, sl_target, awt, interval_seconds, default_channel):
         asa = CHAT.asa(arrival_rate, aht_list, row["Agentes_Actuales"])
         occupancy = occupancy_erlang_c(arrival_rate, row["AHT"], row["Agentes_Actuales"])
         agents_req = CHAT.agents_for_sla(sl_target, arrival_rate, aht_list, awt, None, None)
-        sl_req = CHAT.sla(arrival_rate, aht_list, agents_req, awt, None, None)
-        asa_req = CHAT.asa(arrival_rate, aht_list, agents_req)
-        occupancy_req = occupancy_erlang_c(arrival_rate, row["AHT"], agents_req)
+        agents_req_ceil = math.ceil(agents_req)  # Redondear hacia arriba
+        sl_req = sl_target  # Por definición debe ser el objetivo (80%)
+        asa_req = CHAT.asa(arrival_rate, aht_list, agents_req_ceil)
+        occupancy_req = occupancy_erlang_c(arrival_rate, row["AHT"], agents_req_ceil)
     else:
         sl = service_level_erlang_c(arrival_rate, row["AHT"], row["Agentes_Actuales"], awt)
         asa = waiting_time_erlang_c(arrival_rate, row["AHT"], row["Agentes_Actuales"])
         occupancy = occupancy_erlang_c(arrival_rate, row["AHT"], row["Agentes_Actuales"])
         agents_req = X.AGENTS.for_sla(sl_target, arrival_rate, row["AHT"], awt)
-        sl_req = service_level_erlang_c(arrival_rate, row["AHT"], agents_req, awt)
-        asa_req = waiting_time_erlang_c(arrival_rate, row["AHT"], agents_req)
-        occupancy_req = occupancy_erlang_c(arrival_rate, row["AHT"], agents_req)
+        agents_req_ceil = math.ceil(agents_req)  # Redondear hacia arriba
+        sl_req = sl_target  # Por definición debe ser el objetivo (80%)
+        asa_req = waiting_time_erlang_c(arrival_rate, row["AHT"], agents_req_ceil)
+        occupancy_req = occupancy_erlang_c(arrival_rate, row["AHT"], agents_req_ceil)
 
     diff_agents = agents_req - row["Agentes_Actuales"]
 
