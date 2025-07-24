@@ -53,65 +53,93 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # =============================================================================
+# CONSTANTES DE VISUALIZACIÓN
+# =============================================================================
+
+BUSY_COLOR = "#EF476F"
+AVAILABLE_COLOR = "#06D6A0"
+QUEUE_SHORT_COLOR = "#06D6A0"
+QUEUE_MED_COLOR = "#FFD166"
+QUEUE_LONG_COLOR = "#EF476F"
+
+GOOD_COLOR = "#06D6A0"
+WARN_COLOR = "#FFD166"
+BAD_COLOR = "#EF476F"
+
+BUSY_ICON = "📞"
+AVAILABLE_ICONS = ["👨‍💼", "👩‍💼"]
+QUEUE_ICON = "🧑‍🤝‍🧑"
+
+# =============================================================================
 # VISUALIZACIÓN DINÁMICA DE AGENTES
 # =============================================================================
 
 def create_agent_visualization(
     forecast, aht, agents, awt, interval_seconds=3600
 ):
-    """Genera una visualización intuitiva del estado de agentes y métricas"""
+    """Genera una visualización de 3 niveles con panel de métricas"""
 
     arrival_rate = forecast / interval_seconds
     sl = service_level_erlang_c(arrival_rate, aht, agents, awt)
     asa = waiting_time_erlang_c(arrival_rate, aht, agents)
     occupancy = occupancy_erlang_c(arrival_rate, aht, agents)
 
-    fig = go.Figure()
-
+    # --- Layout base -----------------------------------------------------
     agents_per_row = 10
     rows = math.ceil(agents / agents_per_row)
 
+    base_y = 1
+    queue_y = 0
+    metrics_y = base_y + rows + 1
+
+    fig = go.Figure()
+
+    # --- Estados de agentes ---------------------------------------------
     busy_agents = int(agents * occupancy)
     available_agents = agents - busy_agents
     agent_states = ["busy"] * busy_agents + ["available"] * available_agents
 
-    color_map = {"busy": "#FF6B6B", "available": "#4ECDC4"}
-    icon_map = {"busy": "📞", "available": ["👨‍💼", "👩‍💼"]}
-
     agent_x = []
     agent_y = []
-    icons = []
-    labels = []
-    colors = []
+    agent_icons = []
+    agent_labels = []
+    agent_colors = []
 
     for i, state in enumerate(agent_states):
         row = i // agents_per_row
         col = i % agents_per_row
+
         x = col * 1.2
-        y = rows - row - 1
+        y = base_y + rows - row - 1
 
         agent_x.append(x)
         agent_y.append(y)
+        agent_colors.append(BUSY_COLOR if state == "busy" else AVAILABLE_COLOR)
 
-        colors.append(color_map[state])
-        if state == "available":
-            icons.append(icon_map[state][i % 2])
+        if state == "busy":
+            agent_icons.append(BUSY_ICON)
         else:
-            icons.append(icon_map[state])
-        labels.append(f"Agente {i+1}")
+            agent_icons.append(AVAILABLE_ICONS[i % 2])
+
+        agent_labels.append(f"Agente {i+1}")
 
     fig.add_trace(
         go.Scatter(
             x=agent_x,
             y=agent_y,
             mode="markers+text",
-            marker=dict(size=40, color=colors, symbol="circle", line=dict(width=2, color="white")),
-            text=icons,
+            marker=dict(
+                size=40,
+                color=agent_colors,
+                symbol="circle",
+                line=dict(width=2, color="white"),
+            ),
+            text=agent_icons,
             textfont=dict(size=20),
             textposition="middle center",
             hovertemplate="<b>%{customdata}</b><br>Estado: %{meta}<extra></extra>",
-            customdata=labels,
-            meta=[state.title() for state in agent_states],
+            customdata=agent_labels,
+            meta=[s.title() for s in agent_states],
             name="Agentes",
         )
     )
@@ -121,38 +149,33 @@ def create_agent_visualization(
             x=agent_x,
             y=[y - 0.5 for y in agent_y],
             mode="text",
-            text=labels,
+            text=agent_labels,
             textfont=dict(size=10),
             showlegend=False,
             hoverinfo="skip",
         )
     )
 
-    # Calcular cola de espera - CORREGIDO
+    # --- Cola de espera --------------------------------------------------
     traffic_intensity = arrival_rate * aht
     if occupancy > 0.95:
-        # Sistema saturado - mayoría abandona, solo quedan 1-2 personas persistentes
         queue_length = min(2, max(0, int(forecast * 0.04)))
     elif occupancy > 0.85:
-        # Sistema estresado
         queue_length = max(0, int(forecast * 0.08))
     else:
-        # Sistema normal
         pc = erlang_c(traffic_intensity, agents)
         queue_length = max(0, int(pc * forecast * 0.1))
-
-    queue_y = -1
 
     if queue_length > 0:
         queue_positions_x = [i * 1.2 for i in range(min(queue_length, 15))]
         wait_times = [asa * (i + 1) / queue_length for i in range(len(queue_positions_x))]
 
         if asa <= 20:
-            queue_color = "#4ECDC4"
+            queue_color = QUEUE_SHORT_COLOR
         elif asa <= 60:
-            queue_color = "#F7DC6F"
+            queue_color = QUEUE_MED_COLOR
         else:
-            queue_color = "#FF6B6B"
+            queue_color = QUEUE_LONG_COLOR
 
         fig.add_trace(
             go.Scatter(
@@ -160,7 +183,7 @@ def create_agent_visualization(
                 y=[queue_y for _ in queue_positions_x],
                 mode="markers+text",
                 marker=dict(size=30, color=queue_color, symbol="circle", line=dict(width=1, color="gray")),
-                text=["🧑‍🤝‍🧑" for _ in queue_positions_x],
+                text=[QUEUE_ICON for _ in queue_positions_x],
                 textfont=dict(size=18),
                 textposition="middle center",
                 hovertemplate="<b>En cola</b><br>Tiempo: %{customdata:.1f} s<extra></extra>",
@@ -202,10 +225,10 @@ def create_agent_visualization(
             arrowcolor="gray",
         )
 
+    # --- Panel de métricas ----------------------------------------------
     metrics_x = max(agents_per_row, queue_length) * 1.4 + 6
-    metrics_y = rows
 
-    sl_color = "#4ECDC4" if sl >= 0.8 else "#F7DC6F" if sl >= 0.7 else "#FF6B6B"
+    sl_color = GOOD_COLOR if sl >= 0.8 else WARN_COLOR if sl >= 0.7 else BAD_COLOR
     fig.add_trace(
         go.Scatter(
             x=[metrics_x],
@@ -220,7 +243,7 @@ def create_agent_visualization(
         )
     )
 
-    asa_color = "#4ECDC4" if asa <= 20 else "#F7DC6F" if asa <= 60 else "#FF6B6B"
+    asa_color = GOOD_COLOR if asa <= 20 else WARN_COLOR if asa <= 60 else BAD_COLOR
     bar_len = 6
     asa_ratio = min(asa, 120) / 120
     fig.add_shape(
@@ -249,57 +272,67 @@ def create_agent_visualization(
         font=dict(size=12, color="black"),
     )
 
-    occ_color = "#4ECDC4" if 0.7 <= occupancy <= 0.85 else "#F7DC6F" if occupancy <= 0.9 else "#FF6B6B"
+    occ_color = (
+        GOOD_COLOR if 0.7 <= occupancy <= 0.85 else WARN_COLOR if occupancy <= 0.9 else BAD_COLOR
+    )
     fig.add_trace(
         go.Scatter(
             x=[metrics_x],
-            y=[metrics_y - 4],
+            y=[metrics_y - 3],
             mode="markers+text",
             marker=dict(size=60, color=occ_color, symbol="circle"),
             text=[f"{occupancy:.0%}"],
             textfont=dict(size=12, color="white"),
             textposition="middle center",
-            hovertemplate="<b>Ocupación</b><br>%{text}<br><extra></extra>",
+            hovertemplate="<b>Ocupación</b><br>%{text}<extra></extra>",
             name="Ocupación",
         )
     )
 
+    # --- Anotaciones ----------------------------------------------------
     fig.add_annotation(
         x=agents_per_row * 1.2 / 2,
-        y=rows + 0.6,
-        text="<b>👥 AGENTES</b>",
+        y=metrics_y + 0.6,
+        text="<b>🏢 Vista en Tiempo Real del Call Center</b>",
         showarrow=False,
-        font=dict(size=16, color="black"),
+        font=dict(size=16),
     )
 
     fig.add_annotation(
         x=agents_per_row * 1.2 / 2,
-        y=rows + 1.2,
-        text=f"{busy_agents}/{agents} agentes ocupados",
+        y=metrics_y + 1.2,
+        text=f"Forecast: {forecast:.0f} h | AHT: {aht:.0f}s | Agentes: {agents}",
         showarrow=False,
         font=dict(size=12, color="gray"),
     )
 
+    fig.add_annotation(
+        x=agents_per_row * 1.2 / 2,
+        y=base_y + rows + 0.3,
+        text=f"<b>👥 AGENTES ({busy_agents}/{agents})</b>",
+        showarrow=False,
+        font=dict(size=14),
+    )
+
     if queue_length > 0:
-        q_mid = (len(queue_positions_x) - 1) * 1.2 / 2 if queue_length > 0 else 0
+        q_mid = (min(queue_length, 15) - 1) * 1.2 / 2
         fig.add_annotation(
             x=q_mid,
             y=queue_y - 0.7,
             text=f"<b>📞 COLA ({queue_length})</b>",
             showarrow=False,
-            font=dict(size=16, color="black"),
+            font=dict(size=14),
         )
         fig.add_annotation(
             x=q_mid,
             y=queue_y - 1.2,
             text=f"Próxima llamada en: {1 / arrival_rate:.0f}s",
             showarrow=False,
-            font=dict(size=12, color="gray"),
+            font=dict(size=10, color="gray"),
         )
-
         fig.add_annotation(
             x=q_mid,
-            y=rows - 0.2,
+            y=base_y - 0.2,
             ax=q_mid,
             ay=queue_y + 0.2,
             text="",
@@ -310,25 +343,31 @@ def create_agent_visualization(
 
     fig.add_annotation(
         x=metrics_x,
-        y=rows + 0.6,
+        y=metrics_y + 0.4,
         text="<b>📊 MÉTRICAS</b>",
         showarrow=False,
         font=dict(size=16, color="black"),
     )
 
+    # --- Configuración de Layout ---------------------------------------
     fig.update_layout(
-        title={
-            "text": f"<b>🏢 Vista en Tiempo Real del Call Center</b><br><span style='font-size:14px'>Forecast: {forecast:.0f} llamadas/h | AHT: {aht:.0f}s | Agentes: {agents}</span>",
-            "x": 0.5,
-            "font": {"size": 18},
-        },
-        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[-1, metrics_x + 5]),
-        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[queue_y - 2, rows + 2]),
+        xaxis=dict(
+            showgrid=False,
+            zeroline=False,
+            showticklabels=False,
+            range=[-1, metrics_x + 5],
+        ),
+        yaxis=dict(
+            showgrid=False,
+            zeroline=False,
+            showticklabels=False,
+            range=[queue_y - 2, metrics_y + 2],
+        ),
         plot_bgcolor="#F8F9FA",
         paper_bgcolor="white",
         showlegend=True,
         legend=dict(orientation="h", yanchor="bottom", y=-0.1, xanchor="center", x=0.5),
-        height=400 + (rows * 50),
+        height=400 + rows * 50,
         width=max(1000, int((metrics_x + 5) * 40)),
         margin=dict(l=80, r=80, t=80, b=100),
     )
