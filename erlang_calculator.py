@@ -10,6 +10,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 from scipy import optimize
 import math
+import io
 
 # =============================================================================
 # CONFIGURACIÓN DE STREAMLIT
@@ -829,6 +830,7 @@ def main():
             "Erlang O (Outbound)",
             "Análisis Comparativo",
             "Staffing Optimizer",
+            "Batch Processor",
         ]
     )
     
@@ -846,6 +848,8 @@ def main():
         comparative_analysis()
     elif module == "Staffing Optimizer":
         staffing_optimizer()
+    elif module == "Batch Processor":
+        batch_processor()
 
     # Display methodology and formulas
     show_methodology()
@@ -1520,6 +1524,75 @@ def staffing_optimizer():
         optimal_shifts = df_shifts.nsmallest(3, 'Agentes')
         st.subheader("🎯 Turnos Recomendados")
         st.dataframe(optimal_shifts, use_container_width=True)
+
+# =============================================================================
+# BATCH PROCESSING
+# =============================================================================
+
+def batch_processor():
+    st.header("📂 Batch Processor")
+
+    file = st.file_uploader("Cargar archivo (.csv o .xlsx)", type=["csv", "xlsx"])
+    if not file:
+        st.info(
+            "Sube un archivo con las columnas Contactos, AHT y Agentes_Actuales"
+        )
+        return
+
+    if file.name.endswith(".csv"):
+        df = pd.read_csv(file)
+    else:
+        df = pd.read_excel(file)
+
+    sl_target = st.number_input(
+        "Service Level objetivo", min_value=0.0, max_value=1.0, value=0.8, step=0.01
+    )
+    awt = st.number_input("AWT (segundos)", min_value=1.0, value=20.0, step=1.0)
+
+    if "Intervalo_Segundos" not in df.columns:
+        interval_choice = st.selectbox(
+            "Duración del intervalo", ["30 minutos", "1 hora"], index=1
+        )
+        interval_seconds = 1800 if interval_choice == "30 minutos" else 3600
+    else:
+        interval_seconds = None
+
+    channel = st.text_input("Tipo de canal", "llamadas")
+
+    results = df.copy()
+    for idx, row in results.iterrows():
+        seconds = row.get("Intervalo_Segundos", interval_seconds or 3600)
+        arrival_rate = row["Contactos"] / seconds
+        sl = service_level_erlang_c(
+            arrival_rate, row["AHT"], row["Agentes_Actuales"], awt
+        )
+        asa = waiting_time_erlang_c(
+            arrival_rate, row["AHT"], row["Agentes_Actuales"]
+        )
+        occupancy = occupancy_erlang_c(
+            arrival_rate, row["AHT"], row["Agentes_Actuales"]
+        )
+        agents_req = X.AGENTS.for_sla(sl_target, arrival_rate, row["AHT"], awt)
+
+        results.at[idx, "SL"] = sl
+        results.at[idx, "ASA"] = asa
+        results.at[idx, "Ocupacion"] = occupancy
+        results.at[idx, "Agentes_Requeridos"] = agents_req
+        results.at[idx, "Canal"] = channel
+
+    st.dataframe(results, use_container_width=True)
+
+    csv_data = results.to_csv(index=False).encode("utf-8")
+    st.download_button("Descargar CSV", csv_data, "batch_result.csv", "text/csv")
+
+    excel_buffer = io.BytesIO()
+    results.to_excel(excel_buffer, index=False)
+    st.download_button(
+        "Descargar Excel",
+        excel_buffer.getvalue(),
+        "batch_result.xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
 # =============================================================================
 # FUNCIONES AUXILIARES
