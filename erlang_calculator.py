@@ -11,6 +11,7 @@ import plotly.express as px
 from scipy import optimize
 import math
 import io
+from core.validators import validate_erlang_inputs
 
 # =============================================================================
 # CONFIGURACIÓN DE STREAMLIT
@@ -878,6 +879,13 @@ def erlang_x_interface():
         if use_advanced:
             lines = st.number_input("Líneas disponibles", min_value=int(agents), value=int(agents*1.2), step=1)
             patience = st.number_input("Patience (segundos)", min_value=1.0, value=120.0, step=1.0)
+
+    # Validación de parámetros
+    errors = validate_erlang_inputs(forecast, aht, agents, awt)
+    if errors:
+        for msg in errors:
+            st.error(msg)
+        return
     
     with col2:
         st.subheader("📊 Resultados")
@@ -1021,6 +1029,13 @@ def enhanced_erlang_x_interface():
         if use_advanced:
             lines = st.number_input("Líneas disponibles", min_value=int(agents), value=int(agents * 1.2), step=1)
             patience = st.number_input("Patience (segundos)", min_value=1.0, value=120.0, step=1.0)
+
+    # Validación de parámetros
+    errors = validate_erlang_inputs(forecast, aht, agents, awt)
+    if errors:
+        for msg in errors:
+            st.error(msg)
+        return
 
     with col2:
         st.subheader("📊 Resultados")
@@ -1751,11 +1766,19 @@ def chat_interface():
         for i in range(max_chats):
             aht = st.number_input(f"AHT para {i+1} chat(s) (seg)", min_value=1.0, value=120.0 + i*30.0, step=1.0, key=f"aht_{i}")
             aht_list.append(aht)
-        
+
         agents = int(st.number_input("Agentes Chat", min_value=1, value=15, step=1))
         awt = st.number_input("AWT Chat (segundos)", min_value=1.0, value=30.0, step=1.0)
         lines = st.number_input("Líneas Chat", min_value=int(agents), value=300, step=1)
         patience = st.number_input("Patience Chat (segundos)", min_value=1.0, value=180.0, step=1.0)
+
+    # Validación de parámetros
+    avg_aht_input = sum(aht_list) / len(aht_list) if aht_list else 0
+    errors = validate_erlang_inputs(forecast, avg_aht_input, agents, awt)
+    if errors:
+        for msg in errors:
+            st.error(msg)
+        return
     
     with col2:
         st.subheader("📊 Resultados Chat")
@@ -1850,6 +1873,13 @@ def blending_interface():
         
         lines = st.number_input("Líneas", min_value=int(total_agents), value=int(total_agents*1.2), step=1)
         patience = st.number_input("Patience (segundos)", min_value=1.0, value=300.0, step=1.0)
+
+    # Validación de parámetros
+    errors = validate_erlang_inputs(inbound_forecast, inbound_aht, total_agents, awt)
+    if errors:
+        for msg in errors:
+            st.error(msg)
+        return
     
     with col2:
         st.subheader("📊 Resultados Blending")
