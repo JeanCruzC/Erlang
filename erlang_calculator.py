@@ -1359,7 +1359,18 @@ def staffing_optimizer():
     
     with col1:
         start_hour = st.selectbox("Hora inicio", range(0, 24), index=8)
-        end_hour = st.selectbox("Hora fin", range(start_hour + 1, 25), index=20)
+        end_hour_options = list(range(start_hour + 1, 25))
+        default_end_hour = 20
+        end_hour_index = (
+            end_hour_options.index(default_end_hour)
+            if default_end_hour in end_hour_options
+            else len(end_hour_options) - 1
+        )
+        end_hour = st.selectbox(
+            "Hora fin",
+            end_hour_options,
+            index=end_hour_index,
+        )
         aht_staff = st.number_input("AHT (segundos)", min_value=1.0, value=240.0, step=1.0, key="aht_staff")
         interval_seconds_staff = st.number_input("Duración del intervalo (segundos)", min_value=1.0, value=3600.0, step=1.0, key="int_staff")
         target_sl_staff = st.slider("Service Level objetivo", 0.7, 0.95, 0.8, 0.01, key="sl_staff")
