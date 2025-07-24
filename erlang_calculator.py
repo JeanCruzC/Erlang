@@ -69,15 +69,39 @@ BAD_COLOR = "#EF476F"
 BUSY_ICON = "📞"
 AVAILABLE_ICONS = ["👨‍💼", "👩‍💼"]
 QUEUE_ICON = "🧑‍🤝‍🧑"
+PLACEHOLDER_ICON = "❔"
+PLACEHOLDER_COLOR = "#B0BEC5"
 
 # =============================================================================
 # VISUALIZACIÓN DINÁMICA DE AGENTES
 # =============================================================================
 
 def create_agent_visualization(
-    forecast, aht, agents, awt, interval_seconds=3600
+    forecast,
+    aht,
+    agents,
+    awt,
+    interval_seconds=3600,
+    required_agents=None,
 ):
-    """Genera una visualización de 3 niveles con panel de métricas"""
+    """Genera una visualización de 3 niveles con panel de métricas
+
+    Parameters
+    ----------
+    forecast : float
+        Número esperado de llamadas.
+    aht : float
+        Tiempo medio de atención (segundos).
+    agents : int
+        Agentes disponibles.
+    awt : float
+        Tiempo objetivo de espera (segundos).
+    interval_seconds : int, optional
+        Intervalo en segundos para el forecast.
+    required_agents : int, optional
+        Cantidad de agentes necesaria para el SLA. Si es mayor que
+        ``agents`` se mostrarán marcadores de vacante.
+    """
 
     arrival_rate = forecast / interval_seconds
     sl = service_level_erlang_c(arrival_rate, aht, agents, awt)
@@ -86,7 +110,8 @@ def create_agent_visualization(
 
     # --- Layout base -----------------------------------------------------
     agents_per_row = 10
-    rows = math.ceil(agents / agents_per_row)
+    display_agents = max(agents, required_agents or agents)
+    rows = math.ceil(display_agents / agents_per_row)
 
     base_y = 1
     queue_y = 0
@@ -97,13 +122,31 @@ def create_agent_visualization(
     # --- Estados de agentes ---------------------------------------------
     busy_agents = int(agents * occupancy)
     available_agents = agents - busy_agents
-    agent_states = ["busy"] * busy_agents + ["available"] * available_agents
+    placeholder_agents = (
+        max(0, (required_agents or agents) - agents)
+        if required_agents is not None
+        else 0
+    )
+    agent_states = (
+        ["busy"] * busy_agents
+        + ["available"] * available_agents
+        + ["missing"] * placeholder_agents
+    )
+
+    fig.add_annotation(
+        x=agents_per_row * 1.2 / 2,
+        y=base_y + rows + 0.6,
+        text=f"{busy_agents}/{agents} agentes ocupados",
+        showarrow=False,
+        font=dict(size=12),
+    )
 
     agent_x = []
     agent_y = []
     agent_icons = []
     agent_labels = []
     agent_colors = []
+    avail_index = 0
 
     for i, state in enumerate(agent_states):
         row = i // agents_per_row
@@ -114,14 +157,22 @@ def create_agent_visualization(
 
         agent_x.append(x)
         agent_y.append(y)
-        agent_colors.append(BUSY_COLOR if state == "busy" else AVAILABLE_COLOR)
 
         if state == "busy":
+            agent_colors.append(BUSY_COLOR)
             agent_icons.append(BUSY_ICON)
+            label = f"Agente {i+1}"
+        elif state == "available":
+            agent_colors.append(AVAILABLE_COLOR)
+            agent_icons.append(AVAILABLE_ICONS[avail_index % 2])
+            avail_index += 1
+            label = f"Agente {i+1}"
         else:
-            agent_icons.append(AVAILABLE_ICONS[i % 2])
+            agent_colors.append(PLACEHOLDER_COLOR)
+            agent_icons.append(PLACEHOLDER_ICON)
+            label = f"Vacante {i - agents + 1}"
 
-        agent_labels.append(f"Agente {i+1}")
+        agent_labels.append(label)
 
     fig.add_trace(
         go.Scatter(
@@ -289,6 +340,15 @@ def create_agent_visualization(
         )
     )
 
+    if occupancy >= 0.95:
+        fig.add_annotation(
+            x=metrics_x,
+            y=metrics_y + 1.6,
+            text="🚨 SISTEMA SATURADO",
+            showarrow=False,
+            font=dict(size=14, color="red"),
+        )
+
     # --- Anotaciones ----------------------------------------------------
     fig.add_annotation(
         x=agents_per_row * 1.2 / 2,
@@ -375,10 +435,30 @@ def create_agent_visualization(
     return fig
 
 
-def create_real_time_dashboard(forecast, aht, agents, awt, interval_seconds=3600):
-    """Crea un dashboard con la visualización de agentes y su estado"""
+def create_real_time_dashboard(
+    forecast, aht, agents, awt, interval_seconds=3600, required_agents=None
+):
+    """Crea un dashboard con la visualización de agentes y su estado.
 
-    agent_viz = create_agent_visualization(forecast, aht, agents, awt, interval_seconds)
+    Parameters
+    ----------
+    forecast : float
+        Número esperado de llamadas.
+    aht : float
+        Tiempo medio de atención.
+    agents : int
+        Agentes disponibles.
+    awt : float
+        Tiempo objetivo de espera.
+    interval_seconds : int, optional
+        Intervalo en segundos del forecast.
+    required_agents : int, optional
+        Total de agentes requerido para cubrir la demanda.
+    """
+
+    agent_viz = create_agent_visualization(
+        forecast, aht, agents, awt, interval_seconds, required_agents
+    )
 
     arrival_rate = forecast / interval_seconds
     sl = service_level_erlang_c(arrival_rate, aht, agents, awt)
