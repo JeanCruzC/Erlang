@@ -1663,7 +1663,13 @@ def blending_interface():
         outbound_aht = st.number_input("AHT Outbound (segundos)", min_value=1.0, value=300.0, step=1.0)
         total_agents = int(st.number_input("Total Agentes", min_value=1, value=30, step=1))
         awt = st.number_input("AWT (segundos)", min_value=1.0, value=20.0, step=1.0)
-        threshold = st.number_input("Threshold (agentes reservados)", min_value=0.0, value=3.0, step=1.0, max_value=total_agents)
+        threshold = st.number_input(
+            "Threshold (agentes reservados)",
+            min_value=0,
+            value=3,
+            step=1,
+            max_value=total_agents
+        )
         
         lines = st.number_input("Líneas", min_value=int(total_agents), value=int(total_agents*1.2), step=1)
         patience = st.number_input("Patience (segundos)", min_value=1.0, value=300.0, step=1.0)
