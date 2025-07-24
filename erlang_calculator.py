@@ -943,6 +943,14 @@ def enhanced_erlang_x_interface():
         st.metric("ASA", f"{asa:.2f} seg")
         st.metric("Ocupación", f"{occ:.1%}")
 
+        target_sl = 0.8
+        required_agents = X.AGENTS.for_sla(target_sl, arrival_rate, aht, awt)
+
+        req_col, cur_col, diff_col = st.columns(3)
+        req_col.metric("Agentes Requeridos", f"{required_agents}")
+        cur_col.metric("Agentes Actuales", f"{agents}")
+        diff_col.metric("Diferencia", f"{required_agents - agents:+}")
+
     st.subheader("🎬 Visualización en Tiempo Real")
 
     agent_viz, status_bar = create_real_time_dashboard(forecast, aht, agents, awt, interval_seconds)
