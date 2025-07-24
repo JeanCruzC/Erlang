@@ -883,6 +883,8 @@ def erlang_x_interface():
         sl = X.SLA.calculate(arrival_rate, aht, agents, awt, lines, patience)
         asa = X.asa(arrival_rate, aht, agents)
         occ = X.occupancy(arrival_rate, aht, agents)
+        hourly_forecast = forecast * 3600 / interval_seconds
+        calls_per_agent = hourly_forecast / agents
         
         # Mostrar métricas
         sl_class = "success-metric" if sl >= 0.8 else "warning-metric" if sl >= 0.7 else "danger-metric"
@@ -909,6 +911,8 @@ def erlang_x_interface():
             <h2>{occ:.1%}</h2>
         </div>
         """, unsafe_allow_html=True)
+
+        st.metric("Llamadas por Agente", f"{calls_per_agent:.1f}")
         
         if use_advanced and lines and patience:
             abandon_rate = X.abandonment(arrival_rate, aht, agents, lines, patience)
@@ -927,10 +931,13 @@ def erlang_x_interface():
     target_sl = st.slider("Service Level Objetivo", 0.7, 0.95, 0.8, 0.01)
     recommended_agents = X.AGENTS.for_sla(target_sl, arrival_rate, aht, awt, lines, patience)
     
-    col1, col2, col3 = st.columns(3)
+    calls_per_agent_req = hourly_forecast / recommended_agents if recommended_agents else 0
+
+    col1, col2, col3, col4 = st.columns(4)
     col1.metric("Agentes Recomendados", f"{recommended_agents}")
     col2.metric("Agentes Actuales", f"{agents}")
     col3.metric("Diferencia", f"{recommended_agents - agents:+}")
+    col4.metric("Llamadas/Agente Requerido", f"{calls_per_agent_req:.1f}")
     
     # Gráfico de sensibilidad
     st.subheader("📈 Análisis de Sensibilidad")
@@ -1018,18 +1025,24 @@ def enhanced_erlang_x_interface():
         sl = X.SLA.calculate(arrival_rate, aht, agents, awt, lines, patience)
         asa = X.asa(arrival_rate, aht, agents)
         occ = X.occupancy(arrival_rate, aht, agents)
+        hourly_forecast = forecast * 3600 / interval_seconds
+        calls_per_agent = hourly_forecast / agents
 
         st.metric("Service Level", f"{sl:.1%}")
         st.metric("ASA", f"{asa:.2f} seg")
         st.metric("Ocupación", f"{occ:.1%}")
+        st.metric("Llamadas por Agente", f"{calls_per_agent:.1f}")
 
         target_sl = 0.8
         required_agents = X.AGENTS.for_sla(target_sl, arrival_rate, aht, awt)
 
-        req_col, cur_col, diff_col = st.columns(3)
+        calls_per_agent_req = hourly_forecast / required_agents if required_agents else 0
+
+        req_col, cur_col, diff_col, cpa_col = st.columns(4)
         req_col.metric("Agentes Requeridos", f"{required_agents}")
         cur_col.metric("Agentes Actuales", f"{agents}")
         diff_col.metric("Diferencia", f"{required_agents - agents:+}")
+        cpa_col.metric("Llamadas/Agente Requerido", f"{calls_per_agent_req:.1f}")
 
     st.subheader("🎬 Visualización en Tiempo Real")
 
